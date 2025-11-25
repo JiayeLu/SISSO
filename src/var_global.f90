@@ -36,11 +36,13 @@ real*8    fmax_min,fmax_max,bwidth,PI
 parameter (str_len=150,PI=3.14159265d0,Smaxlen=60)
 character ops(20)*200,method_so*10,metric*10
 integer*8 nf_sis(10000),nf_sis_avai(10000)
-logical   fit_intercept,scmt
+logical   fit_intercept,scmt,fix_descriptor
 integer,allocatable:: nsample(:),ngroup(:,:),isconvex(:,:)
 real*8,allocatable:: target_y(:),pfdata(:,:),res(:),feature_units(:,:),ypred(:)
 character(len=30),allocatable:: pfname(:)
+integer   n_fix_desc
+integer,allocatable:: fix_desc_dim(:),fix_desc_idx(:)
+character(len=200),allocatable:: fix_desc_expr(:)
 integer   mpierr,mpirank,mpisize,status(MPI_STATUS_SIZE)
 
 end module 
-
