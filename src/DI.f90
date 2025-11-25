@@ -31,6 +31,7 @@ character line*500
 character,allocatable:: expr(:)*200
 logical isnew,dat_readerr
 integer needed_fix
+integer f
 
 if(mpirank==0) mytime.sDI=mpi_wtime()
    maxns=maxval(nsample)
@@ -128,6 +129,29 @@ if(fix_descriptor) then
    end if
    call mpi_bcast(fix_desc_idx,n_fix_desc,mpi_integer,0,mpi_comm_world,mpierr)
    if(any(fix_desc_idx==0)) stop
+
+   if(n_constrain_desc>0 .and. mpirank==0) then
+      do f=1,n_fix_desc
+         do i=1,n_constrain_desc
+            if(constrain_desc_dim(i)==fix_desc_dim(f)) then
+               if(fix_desc_idx(f)<constrain_feat_lo(i) .or. fix_desc_idx(f)>constrain_feat_hi(i)) then
+                  write(*,'(a,i4,a,i8,a,i8)') 'Error: fixed descriptor in dim ',fix_desc_dim(f), &
+                      ' is outside allowed range [',constrain_feat_lo(i),',',constrain_feat_hi(i),']'
+                  stop
+               end if
+            end if
+         end do
+      end do
+   end if
+end if
+
+if(n_constrain_desc>0) then
+   do f=1,n_constrain_desc
+      if(constrain_feat_hi(f)>nf_DI) then
+         if(mpirank==0) print *,'Error: constrain_feat_ranges exceed nf_DI.'
+         stop
+      end if
+   end do
 end if
 
 ! argmin{sum(w_i*(y_i-bx_i)^2},e.g. https://en.wikipedia.org/wiki/Weighted_least_squares
@@ -496,6 +520,13 @@ use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
             if(.not. any(activeset(ii(:iFCDI))==fix_desc_idx(f))) goto 124
          end do
       end if
+      if(n_constrain_desc>0) then
+         do f=1,n_constrain_desc
+            if(constrain_desc_dim(f)>iFCDI) cycle
+            if(.not. (activeset(ii(constrain_desc_dim(f)))>=constrain_feat_lo(f) .and. &
+                      activeset(ii(constrain_desc_dim(f)))<=constrain_feat_hi(f))) goto 124
+         end do
+      end if
 
       if ( trim(adjustl(metric))=='RMSE' .or. trim(adjustl(metric))=='MaxAE') then
          do i=1,ntask
@@ -839,6 +870,13 @@ use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
          do f=1,n_fix_desc
             if(fix_desc_dim(f)>iFCDI) cycle
             if(.not. any(activeset(ii(:iFCDI))==fix_desc_idx(f))) goto 124
+         end do
+      end if
+      if(n_constrain_desc>0) then
+         do f=1,n_constrain_desc
+            if(constrain_desc_dim(f)>iFCDI) cycle
+            if(.not. (activeset(ii(constrain_desc_dim(f)))>=constrain_feat_lo(f) .and. &
+                      activeset(ii(constrain_desc_dim(f)))<=constrain_feat_hi(f))) goto 124
          end do
       end if
 

@@ -10,6 +10,8 @@ scmt=.false.           !(R) Sign-Constrained MTL is invoked if .true.
 desc_dim=2             !(R&C) Dimension of the descriptor/model.
 fix_desc_dims=()       !(R&C) List of descriptor dimensions to fix (e.g., (1,3)); only valid if desc_dim>1.
 fix_desc_exprs=()      !(R&C) Corresponding expressions (Uspace.expressions) to keep fixed, same length as dims.
+constrain_desc_dims=() !(R&C) Descriptor dims with feature-ID range constraint (e.g., (1,3)); only if desc_dim>1.
+constrain_feat_ranges=() !(R&C) Corresponding closed intervals of allowed feature IDs, same length as dims, e.g., ((1,10),(20,25))
 nsample=5              !(R) Number of samples in train.dat. Set nsample=N1,N2,... for MTL.
 !nsample=(n1,n2,...)   !(C) Number of samples. Set nsample=(n1,n2,...),(m1,m2,...),... for MTL.
 restart=0              !(R&C) 0: starts from scratch, 1: continues the job(progress in the file CONTINUE)

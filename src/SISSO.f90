@@ -259,6 +259,43 @@ do while(.true.)
       allocate(fix_desc_expr(n_fix_desc))
       read(funit_line,*,err=1001) fix_desc_expr
    end if
+   case('constrain_desc_dims')
+   read(line_short(i+1:),'(a)',err=1001) funit_line
+   if(allocated(constrain_desc_dim)) deallocate(constrain_desc_dim)
+   if(allocated(constrain_feat_lo)) deallocate(constrain_feat_lo)
+   if(allocated(constrain_feat_hi)) deallocate(constrain_feat_hi)
+   n_constrain_desc=0
+   if(index(funit_line,'(')>0 .and. index(funit_line,')')>0) then
+      i=index(funit_line,'(')
+      j=index(funit_line,')')
+      if(j<=i) goto 1001
+      n_constrain_desc=1
+      do k=i+1,j
+         if(funit_line(k:k)==',') n_constrain_desc=n_constrain_desc+1
+      end do
+      allocate(constrain_desc_dim(n_constrain_desc))
+      read(funit_line(i:j),*,err=1001) constrain_desc_dim
+   end if
+   case('constrain_feat_ranges')
+   read(line_short(i+1:),'(a)',err=1001) funit_line
+   if(n_constrain_desc>0) then
+      allocate(constrain_feat_lo(n_constrain_desc))
+      allocate(constrain_feat_hi(n_constrain_desc))
+      do k=1,n_constrain_desc
+         constrain_feat_lo(k)=0
+         constrain_feat_hi(k)=0
+      end do
+      i=index(funit_line,'(')
+      j=index(funit_line,')')
+      if(i<=0 .or. j<=0) goto 1001
+      do k=1,n_constrain_desc
+         read(funit_line(i:j),*,err=1001) constrain_feat_lo(k),constrain_feat_hi(k)
+         funit_line(:j)=''
+         i=index(funit_line,'(')
+         j=index(funit_line,')')
+         if(k<n_constrain_desc .and. (i<=0 .or. j<=0)) goto 1001
+      end do
+   end if
    case('funit')
      read(line_short(i+1:),'(a)',err=1001) funit_line
      if(index(funit_line(k+1:),'(')>0) nunit=0
@@ -347,6 +384,36 @@ else
    if(allocated(fix_desc_dim)) deallocate(fix_desc_dim)
    if(allocated(fix_desc_expr)) deallocate(fix_desc_expr)
    if(allocated(fix_desc_idx)) deallocate(fix_desc_idx)
+end if
+
+if(n_constrain_desc>0) then
+   if(.not. allocated(constrain_desc_dim) .or. .not. allocated(constrain_feat_lo) .or. .not. allocated(constrain_feat_hi)) then
+      print *,'Error: constrain_desc_dims/constrain_feat_ranges mismatch.'; stop
+   end if
+   if(size(constrain_desc_dim)/=n_constrain_desc .or. size(constrain_feat_lo)/=n_constrain_desc .or. size(constrain_feat_hi)/=n_constrain_desc) then
+      print *,'Error: constrain_* length mismatch.'; stop
+   end if
+   if(desc_dim<=1) then
+      print *,'Error: constrain_desc_* only valid when desc_dim>1.'; stop
+   end if
+   do i=1,n_constrain_desc
+      if(constrain_desc_dim(i)<1 .or. constrain_desc_dim(i)>desc_dim) then
+         print *,'Error: constrain_desc_dim out of range.'; stop
+      end if
+      do j=i+1,n_constrain_desc
+         if(constrain_desc_dim(i)==constrain_desc_dim(j)) then
+            print *,'Error: duplicate constrain_desc_dim entry.'; stop
+         end if
+      end do
+      if(constrain_feat_lo(i)<1 .or. constrain_feat_hi(i)<constrain_feat_lo(i)) then
+         print *,'Error: constrain_feat_ranges invalid.'; stop
+      end if
+   end do
+else
+   n_constrain_desc=0
+   if(allocated(constrain_desc_dim)) deallocate(constrain_desc_dim)
+   if(allocated(constrain_feat_lo)) deallocate(constrain_feat_lo)
+   if(allocated(constrain_feat_hi)) deallocate(constrain_feat_hi)
 end if
 
 if(fcomplexity==0) then
@@ -548,9 +615,13 @@ nf_sis_avai=0
 task_weighting=1      
 fix_descriptor=.false.
 n_fix_desc=0
+n_constrain_desc=0
 if(allocated(fix_desc_dim)) deallocate(fix_desc_dim)
 if(allocated(fix_desc_idx)) deallocate(fix_desc_idx)
 if(allocated(fix_desc_expr)) deallocate(fix_desc_expr)
+if(allocated(constrain_desc_dim)) deallocate(constrain_desc_dim)
+if(allocated(constrain_feat_lo)) deallocate(constrain_feat_lo)
+if(allocated(constrain_feat_hi)) deallocate(constrain_feat_hi)
 !---------------------
 L1para.max_iter=1e6         ! Max iteration for LASSO (given a lambda) to stop
 L1para.tole=1e-6            ! Convergence criteria for LASSO to stop
@@ -581,6 +652,12 @@ subroutine output_para
       write(9,'(a)') 'Fixed descriptors:'
       do i=1,n_fix_desc
          write(9,'(a,i8,a,a)') '  Dim ',fix_desc_dim(i),': ',trim(fix_desc_expr(i))
+      end do
+   end if
+   if(n_constrain_desc>0) then
+      write(9,'(a)') 'Descriptor dimension feature-range constraints:'
+      do i=1,n_constrain_desc
+         write(9,'(a,i8,2a,i8,a,i8)') '  Dim ',constrain_desc_dim(i),': [',constrain_feat_lo(i),',',constrain_feat_hi(i),']'
       end do
    end if
    write(9,2001)  'Number of samples for the task(s): ',nsample

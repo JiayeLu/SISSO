@@ -43,6 +43,8 @@ character(len=30),allocatable:: pfname(:)
 integer   n_fix_desc
 integer,allocatable:: fix_desc_dim(:),fix_desc_idx(:)
 character(len=200),allocatable:: fix_desc_expr(:)
+integer   n_constrain_desc
+integer,allocatable:: constrain_desc_dim(:),constrain_feat_lo(:),constrain_feat_hi(:)
 integer   mpierr,mpirank,mpisize,status(MPI_STATUS_SIZE)
 
 end module 
