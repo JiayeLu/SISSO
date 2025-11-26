@@ -30,6 +30,10 @@ integer,allocatable:: idf(:),activeset(:),ncol(:)
 character line*500
 character,allocatable:: expr(:)*200
 logical isnew,dat_readerr
+integer needed_fix
+integer,allocatable:: keep_id(:)
+logical,allocatable:: pf_allowed(:)
+character(len=200) expr_tmp
 
 if(mpirank==0) mytime.sDI=mpi_wtime()
    maxns=maxval(nsample)
@@ -39,7 +43,8 @@ allocate(xinput(maxns,nf_DI,ntask))
 allocate(yinput(maxns,ntask))
 allocate(expr(nf_DI))
 allocate(weight(maxns,ntask))
-allocate(activeset(nf_L0))
+allocate(activeset(max(nf_L0,1)+1+n_fix_desc))
+allocate(pf_allowed(nsf))
 
 !---------------------------------
 ! job allocation to the CPU cores
@@ -105,6 +110,57 @@ if(mpirank==0) then
 end if
 
 call mpi_bcast(expr,nf_DI*200,mpi_character,0,mpi_comm_world,mpierr)
+
+! per-dimension primary-feature constraints via DI filtering
+if(n_constrain_pf>0 .and. any(constrain_pf_dim==iFCDI)) then
+   pf_allowed=.false.
+   do k=1,n_constrain_pf
+      if(constrain_pf_dim(k)==iFCDI) pf_allowed(constrain_feat_lo(k):constrain_feat_hi(k))=.true.
+   end do
+   allocate(keep_id(nf_DI))
+   ll=0
+   do j=1,nf_DI
+      expr_tmp=trim(expr(j))
+      if(is_feature_allowed(expr_tmp,pf_allowed)) then
+         ll=ll+1
+         keep_id(ll)=j
+         if(ll/=j) then
+            xinput(:,ll,:)=xinput(:,j,:)
+            expr(ll)=expr(j)
+         end if
+      end if
+   end do
+   if(ll==0) then
+      if(mpirank==0) print *,'Error: no features left after constrain_pf filtering for this dimension.'
+      stop
+   end if
+   nf_DI=ll
+   if(nf_L0>nf_DI) nf_L0=nf_DI
+end if
+
+if(fix_descriptor) then
+   if(.not. allocated(fix_desc_idx)) then
+      print *,'Error: fix_desc_idx not allocated.'; stop
+   end if
+   if(mpirank==0) then
+      do k=1,n_fix_desc
+         if(fix_desc_dim(k)/=iFCDI) cycle
+         if(fix_desc_idx(k)==0) then
+            do i=1,nf_DI
+               if(trim(expr(i))==trim(fix_desc_expr(k))) then
+                  fix_desc_idx(k)=i
+                  exit
+               end if
+            end do
+            if(fix_desc_idx(k)==0) then
+               write(*,'(a,a)') 'Error: fixed descriptor expression not found: ',trim(fix_desc_expr(k))
+            end if
+         end if
+      end do
+   end if
+   call mpi_bcast(fix_desc_idx,n_fix_desc,mpi_integer,0,mpi_comm_world,mpierr)
+   if(any(fix_desc_dim==iFCDI .and. fix_desc_idx==0)) stop
+end if
 
 ! argmin{sum(w_i*(y_i-bx_i)^2},e.g. https://en.wikipedia.org/wiki/Weighted_least_squares
 ! one w_i corresponds to one (y_i-bx_i)
@@ -345,6 +401,7 @@ if(trim(adjustl(method_so))=='L1L0' .and. nf_DI > nf_L0 .and. ptype==1) then
     deallocate(ymean)
     deallocate(lassormse)
     if(mpirank==0) write(9,'(a)') ' L1 finished ! '
+    call ensure_fixed_descriptor_active(nactive,activeset)
     !---------------
     ! L0 of the L1L0
     !---------------
@@ -355,6 +412,7 @@ else if (trim(adjustl(method_so))=='L0' .or. nf_DI==nf_L0) then
     do i=1,nf_L0
        activeset(i)=i
     end do
+    call ensure_fixed_descriptor_active(nactive,activeset)
     if(ptype==1) then
      call model(xinput,yinput,expr,nactive,activeset)
     else if (ptype==2) then
@@ -369,12 +427,58 @@ deallocate(yinput)
 deallocate(expr)
 deallocate(activeset)
 deallocate(weight)
+if(allocated(keep_id)) deallocate(keep_id)
+if(allocated(pf_allowed)) deallocate(pf_allowed)
 
 call mpi_barrier(mpi_comm_world,mpierr)
 if(mpirank==0) then
   mytime.eDI=mpi_wtime()
   write(9,'(a,f15.2)') 'Time (second) used for this DI: ',mytime.eDI-mytime.sDI
 end if
+
+end subroutine
+
+
+logical function is_feature_allowed(expr,pf_allowed)
+! check if expression only uses allowed primary features
+character(len=*),intent(in):: expr
+logical,intent(in):: pf_allowed(:)
+integer i
+
+is_feature_allowed=.true.
+do i=1,nsf
+   if(len_trim(pfname(i))==0) cycle
+   if(index(expr,trim(pfname(i)))>0) then
+      if(i>size(pf_allowed)) then
+         is_feature_allowed=.false.
+         return
+      end if
+      if(.not. pf_allowed(i)) then
+         is_feature_allowed=.false.
+         return
+      end if
+   end if
+end do
+
+end function
+
+
+subroutine ensure_fixed_descriptor_active(nactive,activeset)
+! make sure required fixed descriptors are in the active set for current iFCDI
+integer, intent(inout):: nactive,activeset(:)
+integer f
+
+if(.not. fix_descriptor) return
+do f=1,n_fix_desc
+   if(fix_desc_dim(f)>iFCDI) cycle
+   if(any(activeset(:nactive)==fix_desc_idx(f))) cycle
+   if(nactive>=size(activeset)) then
+      if(mpirank==0) write(*,'(a)') 'Error: active set is full; cannot insert fixed descriptor.'
+      stop
+   end if
+   nactive=nactive+1
+   activeset(nactive)=fix_desc_idx(f)
+end do
 
 end subroutine
 
@@ -391,10 +495,14 @@ select_coeff(max(nmodel,1),iFCDI+1,ntask),mscore(max(nmodel,1),2,1+ntask),&
 select_metric(max(nmodel,1)),mcoeff(max(nmodel,1),iFCDI+1,ntask),sc_beta(iFCDI,2**iFCDI,ntask),&
 sc_intercept(2**iFCDI,ntask),sc_tmp(2**iFCDI),sc_tmp2(2**iFCDI),mpicollect(mpisize)
 character expr(:)*200,line_name*100
-logical isgood
+logical isgood,use_fixed
 real   progress
+integer model_ids(iFCDI)
+real*8 coeff_store(iFCDI,ntask)
+integer f
 
 if(nmodel<1) nmodel=1
+use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 
    progress=0.2
 
@@ -438,6 +546,13 @@ if(nmodel<1) nmodel=1
        end do
        write(*,'(a,i4,a,i4,a,f6.1,a)') 'dimension =',iFCDI,'   mpirank = ',mpirank,'   progress =',progress*100,'%'
         progress=progress+0.2
+      end if
+      
+      if(use_fixed) then
+         do f=1,n_fix_desc
+            if(fix_desc_dim(f)>iFCDI) cycle
+            if(.not. any(activeset(ii(:iFCDI))==fix_desc_idx(f))) goto 124
+         end do
       end if
 
       if ( trim(adjustl(metric))=='RMSE' .or. trim(adjustl(metric))=='MaxAE') then
@@ -521,18 +636,27 @@ if(nmodel<1) nmodel=1
          totalm=totalm+1
          select_rmse(loc(1))=tmp
          select_maxae(loc(1))=tmp2
-         select_model(loc(1),:iFCDI)=activeset(ii(:iFCDI))
+         model_ids=activeset(ii(:iFCDI))
+         if(scmt) then
+            do i=1,ntask
+               coeff_store(:,i)=sc_beta(:iFCDI,sc_loc(1),i)
+            end do
+         else
+            coeff_store=beta(:iFCDI,:)
+         end if
+         call reorder_fixed_descriptor(model_ids,coeff_store)
+         select_model(loc(1),:iFCDI)=model_ids
          select_score(loc(1),1,1)=tmp
          select_score(loc(1),2,1)=tmp2
          do i=1,ntask
              if( scmt ) then
                select_coeff(loc(1),1,i)=sc_intercept(sc_loc(1),i)
-               select_coeff(loc(1),2:iFCDI+1,i)=sc_beta(:iFCDI,sc_loc(1),i)
+               select_coeff(loc(1),2:iFCDI+1,i)=coeff_store(:,i)
                select_score(loc(1),1,1+i)=sc_rmse(sc_loc(1),i)
                select_score(loc(1),2,1+i)=sc_maxae(sc_loc(1),i)
              else
                select_coeff(loc(1),1,i)=intercept(i)
-               select_coeff(loc(1),2:iFCDI+1,i)=beta(:iFCDI,i)
+               select_coeff(loc(1),2:iFCDI+1,i)=coeff_store(:,i)
                select_score(loc(1),1,1+i)=rmse(i)
                select_score(loc(1),2,1+i)=maxae(i)
              end if
@@ -714,11 +838,15 @@ hull(ubound(x,1),2),area(maxval(ngroup(:,1000))),mindist,xtmp1(ubound(x,1),3),xt
 character expr(:)*200,line_name*100
 integer*8 njob(mpisize),mpii,mpij
 real*8 mpicollect(mpisize,2)
-logical isoverlap
+logical isoverlap,use_fixed
 real progress
 integer,allocatable:: triangles(:,:)
+integer model_ids(iFCDI)
+integer f
 
 if(nmodel<1) nmodel=1
+
+use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 
   progress=0.2
   if(iFCDI>2) stop 'Error: Current code supports only 1D and 2D in classification!'
@@ -763,6 +891,13 @@ if(nmodel<1) nmodel=1
         end do
         write(*,'(a,i4,a,i4,a,f6.1,a)') 'dimension =',iFCDI,'   mpirank =',mpirank,'   progress =',progress*100,'%'
         progress=progress+0.2
+      end if
+      
+      if(use_fixed) then
+         do f=1,n_fix_desc
+            if(fix_desc_dim(f)>iFCDI) cycle
+            if(.not. any(activeset(ii(:iFCDI))==fix_desc_idx(f))) goto 124
+         end do
       end if
 
       ! initialization
@@ -874,19 +1009,22 @@ if(nmodel<1) nmodel=1
          if(isoverlap)  overlap_size=overlap_size/float(nconvexpair) ! smaller, better
          !----------------------------------
 
+      model_ids=activeset(ii(:iFCDI))
+      call reorder_fixed_descriptor_ids(model_ids)
+
       ! store the good models 
       if (any(overlap_n<select_overlap_n)) then
          totalm=totalm+1
          loc=maxloc(select_overlap_n)
          select_overlap_n(loc(1))=overlap_n
          select_overlap_size(loc(1))=overlap_size
-         select_model(loc(1),:iFCDI)=activeset(ii(:iFCDI))
+         select_model(loc(1),:iFCDI)=model_ids
       else if (overlap_n==maxval(select_overlap_n) .and. any(overlap_size<select_overlap_size) )  then
          totalm=totalm+1
          loc=maxloc(select_overlap_size)
          select_overlap_n(loc(1))=overlap_n
          select_overlap_size(loc(1))=overlap_size
-         select_model(loc(1),:iFCDI)=activeset(ii(:iFCDI))         
+         select_model(loc(1),:iFCDI)=model_ids         
       end if
 
       ! update models(123,124,125,134,135,145,234,...)
@@ -1041,6 +1179,95 @@ call mpi_barrier(mpi_comm_world,mpierr)
 end subroutine
 
 
+subroutine reorder_fixed_descriptor(ids,coeff)
+! reorder ids/coeff so the fixed descriptor sits at the required dimension
+integer, intent(inout):: ids(:)
+real*8, intent(inout):: coeff(:,:)
+integer ndim,src,j,f,pos_fixed
+integer temp_ids(size(ids))
+real*8 temp_coeff(size(ids),size(coeff,2))
+logical used_temp(size(ids)),used_pos(size(ids))
+
+if(.not. fix_descriptor) return
+ndim=size(ids)
+temp_ids=ids
+temp_coeff=coeff
+used_temp=.false.
+used_pos=.false.
+
+do f=1,n_fix_desc
+   if(fix_desc_dim(f)>ndim) cycle
+   pos_fixed=0
+   do j=1,ndim
+      if(temp_ids(j)==fix_desc_idx(f)) then
+         pos_fixed=j
+         exit
+      end if
+   end do
+   if(pos_fixed==0) cycle
+   ids(fix_desc_dim(f))=temp_ids(pos_fixed)
+   coeff(fix_desc_dim(f),:)=temp_coeff(pos_fixed,:)
+   used_temp(pos_fixed)=.true.
+   used_pos(fix_desc_dim(f))=.true.
+end do
+
+src=1
+do j=1,ndim
+   if(used_pos(j)) cycle
+   do while(src<=ndim .and. used_temp(src))
+      src=src+1
+   end do
+   if(src>ndim) exit
+   ids(j)=temp_ids(src)
+   coeff(j,:)=temp_coeff(src,:)
+   used_temp(src)=.true.
+end do
+
+end subroutine
+
+
+subroutine reorder_fixed_descriptor_ids(ids)
+! reorder ids without coefficients
+integer, intent(inout):: ids(:)
+integer ndim,pos_fixed,src,j,f
+integer temp_ids(size(ids))
+logical used_temp(size(ids)),used_pos(size(ids))
+
+if(.not. fix_descriptor) return
+ndim=size(ids)
+temp_ids=ids
+used_temp=.false.
+used_pos=.false.
+
+do f=1,n_fix_desc
+   if(fix_desc_dim(f)>ndim) cycle
+   pos_fixed=0
+   do j=1,ndim
+      if(temp_ids(j)==fix_desc_idx(f)) then
+         pos_fixed=j
+         exit
+      end if
+   end do
+   if(pos_fixed==0) cycle
+   ids(fix_desc_dim(f))=temp_ids(pos_fixed)
+   used_temp(pos_fixed)=.true.
+   used_pos(fix_desc_dim(f))=.true.
+end do
+
+src=1
+do j=1,ndim
+   if(used_pos(j)) cycle
+   do while(src<=ndim .and. used_temp(src))
+      src=src+1
+   end do
+   if(src>ndim) exit
+   ids(j)=temp_ids(src)
+   used_temp(src)=.true.
+end do
+
+end subroutine
+
+
 subroutine writeout2(x,iFCDI,id,expr,mscore)
 ! output the information for classification
 integer iFCDI,i,j,id(:),k,l,itask,mm1,mm2,mm3,mm4,ndata_ol,ntri
@@ -1129,4 +1356,3 @@ logical inside,convexpair
 end subroutine
 
 end module
-

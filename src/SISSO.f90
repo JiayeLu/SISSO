@@ -237,6 +237,60 @@ do while(.true.)
    read(line_short(i+1:),'(a)',err=1001) isconvex_line
    case('desc_dim')
    read(line_short(i+1:),*,err=1001) desc_dim
+   case('fix_desc_dims')
+   read(line_short(i+1:),'(a)',err=1001) funit_line
+   if(allocated(fix_desc_dim)) deallocate(fix_desc_dim)
+   if(allocated(fix_desc_expr)) deallocate(fix_desc_expr)
+   n_fix_desc=0
+   if(index(funit_line,'(')>0 .and. index(funit_line,')')>0) then
+      i=index(funit_line,'(')
+      j=index(funit_line,')')
+      if(j<=i) goto 1001
+      n_fix_desc=1
+      do k=i+1,j
+         if(funit_line(k:k)==',') n_fix_desc=n_fix_desc+1
+      end do
+      allocate(fix_desc_dim(n_fix_desc))
+      read(funit_line(i:j),*,err=1001) fix_desc_dim
+   end if
+   case('fix_desc_exprs')
+   read(line_short(i+1:),'(a)',err=1001) funit_line
+   if(n_fix_desc>0) then
+      allocate(fix_desc_expr(n_fix_desc))
+      read(funit_line,*,err=1001) fix_desc_expr
+   end if
+   case('constrain_pf_dims')
+   read(line_short(i+1:),'(a)',err=1001) funit_line
+   if(allocated(constrain_pf_dim)) deallocate(constrain_pf_dim)
+   if(allocated(constrain_feat_lo)) deallocate(constrain_feat_lo)
+   if(allocated(constrain_feat_hi)) deallocate(constrain_feat_hi)
+   n_constrain_pf=0
+   if(index(funit_line,'(')>0 .and. index(funit_line,')')>0) then
+      i=index(funit_line,'(')
+      j=index(funit_line,')')
+      if(j<=i) goto 1001
+      n_constrain_pf=1
+      do k=i+1,j
+         if(funit_line(k:k)==',') n_constrain_pf=n_constrain_pf+1
+      end do
+      allocate(constrain_pf_dim(n_constrain_pf))
+      read(funit_line(i:j),*,err=1001) constrain_pf_dim
+   end if
+   case('constrain_pf_ranges')
+   read(line_short(i+1:),'(a)',err=1001) funit_line
+   if(n_constrain_pf>0) then
+      allocate(constrain_feat_lo(n_constrain_pf))
+      allocate(constrain_feat_hi(n_constrain_pf))
+      i=index(funit_line,'(')
+      j=index(funit_line,')')
+      do k=1,n_constrain_pf
+         if(i<=0 .or. j<=0 .or. j<=i) goto 1001
+         read(funit_line(i:j),*,err=1001) constrain_feat_lo(k),constrain_feat_hi(k)
+         funit_line(:j)=''
+         i=index(funit_line,'(')
+         j=index(funit_line,')')
+      end do
+   end if
    case('funit')
      read(line_short(i+1:),'(a)',err=1001) funit_line
      if(index(funit_line(k+1:),'(')>0) nunit=0
@@ -294,6 +348,60 @@ do while(.true.)
    end if
 end do
 close(fileunit)
+
+fix_descriptor=.false.
+if(n_fix_desc>0) then
+   if(.not. allocated(fix_desc_dim) .or. .not. allocated(fix_desc_expr)) then
+      print *,'Error: fix_desc_dims/fix_desc_exprs mismatch.'; stop
+   end if
+   if(desc_dim<=1) then
+      print *,'Error: fix_desc_* only valid when desc_dim>1.'; stop
+   end if
+   if(size(fix_desc_dim)/=size(fix_desc_expr)) then
+      print *,'Error: fix_desc_dims and fix_desc_exprs length mismatch.'; stop
+   end if
+   fix_descriptor=.true.
+   allocate(fix_desc_idx(n_fix_desc))
+   fix_desc_idx=0
+   do i=1,n_fix_desc
+      fix_desc_expr(i)=trim(adjustl(fix_desc_expr(i)))
+      if(fix_desc_dim(i)<1 .or. fix_desc_dim(i)>desc_dim) then
+         print *,'Error: fix_desc_dims out of range.'; stop
+      end if
+      do j=i+1,n_fix_desc
+         if(fix_desc_dim(i)==fix_desc_dim(j)) then
+            print *,'Error: duplicate fix_desc_dims entry.'; stop
+         end if
+      end do
+   end do
+else
+   n_fix_desc=0
+   if(allocated(fix_desc_dim)) deallocate(fix_desc_dim)
+   if(allocated(fix_desc_expr)) deallocate(fix_desc_expr)
+   if(allocated(fix_desc_idx)) deallocate(fix_desc_idx)
+end if
+
+if(n_constrain_pf>0) then
+   if(.not. allocated(constrain_pf_dim) .or. .not. allocated(constrain_feat_lo) .or. .not. allocated(constrain_feat_hi)) then
+      print *,'Error: constrain_pf_dims/constrain_pf_ranges mismatch.'; stop
+   end if
+   if(size(constrain_pf_dim)/=n_constrain_pf .or. size(constrain_feat_lo)/=n_constrain_pf .or. size(constrain_feat_hi)/=n_constrain_pf) then
+      print *,'Error: constrain_pf_* length mismatch.'; stop
+   end if
+   do i=1,n_constrain_pf
+      if(constrain_pf_dim(i)<1 .or. constrain_pf_dim(i)>desc_dim) then
+         print *,'Error: constrain_pf_dim out of range.'; stop
+      end if
+      if(constrain_feat_lo(i)<1 .or. constrain_feat_hi(i)<constrain_feat_lo(i)) then
+         print *,'Error: constrain_pf_ranges invalid.'; stop
+      end if
+   end do
+else
+   n_constrain_pf=0
+   if(allocated(constrain_pf_dim)) deallocate(constrain_pf_dim)
+   if(allocated(constrain_feat_lo)) deallocate(constrain_feat_lo)
+   if(allocated(constrain_feat_hi)) deallocate(constrain_feat_hi)
+end if
 
 if(fcomplexity==0) then
 rung=0
@@ -492,6 +600,15 @@ nmodel=100
 bwidth=0.001         
 nf_sis_avai=0 
 task_weighting=1      
+fix_descriptor=.false.
+n_fix_desc=0
+n_constrain_pf=0
+if(allocated(fix_desc_dim)) deallocate(fix_desc_dim)
+if(allocated(fix_desc_idx)) deallocate(fix_desc_idx)
+if(allocated(fix_desc_expr)) deallocate(fix_desc_expr)
+if(allocated(constrain_pf_dim)) deallocate(constrain_pf_dim)
+if(allocated(constrain_feat_lo)) deallocate(constrain_feat_lo)
+if(allocated(constrain_feat_hi)) deallocate(constrain_feat_hi)
 !---------------------
 L1para.max_iter=1e6         ! Max iteration for LASSO (given a lambda) to stop
 L1para.tole=1e-6            ! Convergence criteria for LASSO to stop
@@ -518,6 +635,18 @@ subroutine output_para
    write(9,'(a,i3)') 'Property type:   ',ptype
    write(9,'(a,i8)') 'Number of tasks: ',ntask
    write(9,'(a,i8)') 'Descriptor dimension: ',desc_dim
+   if(fix_descriptor) then
+      write(9,'(a)') 'Fixed descriptors:'
+      do i=1,n_fix_desc
+         write(9,'(a,i8,a,a)') '  Dim ',fix_desc_dim(i),': ',trim(fix_desc_expr(i))
+      end do
+   end if
+   if(n_constrain_pf>0) then
+      write(9,'(a)') 'Primary feature constraints per descriptor dimension (train.dat columns allowed):'
+      do i=1,n_constrain_pf
+         write(9,'(a,i8,a,i8,a,i8,a)') '  Dim ',constrain_pf_dim(i),': [',constrain_feat_lo(i),',',constrain_feat_hi(i),']'
+      end do
+   end if
    write(9,2001)  'Number of samples for the task(s): ',nsample
    write(9,'(a,i3)') 'Restarts :',restart
 
@@ -574,5 +703,3 @@ subroutine output_para
 end subroutine
 
 end program
-
-
