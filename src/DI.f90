@@ -17,6 +17,7 @@ module DI
 use var_global
 use libsisso
 implicit none
+logical, allocatable :: dim_feature_allowed(:,:) ! per-dimension allowed features
 
 contains
 
@@ -31,7 +32,6 @@ character line*500
 character,allocatable:: expr(:)*200
 logical isnew,dat_readerr
 integer needed_fix
-integer,allocatable:: keep_id(:)
 logical,allocatable:: pf_allowed(:)
 character(len=200) expr_tmp
 
@@ -110,12 +110,36 @@ end if
 
 call mpi_bcast(expr,nf_DI*200,mpi_character,0,mpi_comm_world,mpierr)
 
+! per-dimension primary-feature constraints: precompute allowlist without reordering features
+allocate(dim_feature_allowed(desc_dim,nf_DI))
+dim_feature_allowed=.true.
+if(n_constrain_pf>0) then
+   allocate(pf_allowed(nsf))
+   do i=1,desc_dim
+      if(.not. any(constrain_pf_dim==i)) cycle
+      pf_allowed=.false.
+      do k=1,n_constrain_pf
+         if(constrain_pf_dim(k)==i) pf_allowed(constrain_feat_lo(k):constrain_feat_hi(k))=.true.
+      end do
+      do j=1,nf_DI
+         expr_tmp=trim(expr(j))
+         dim_feature_allowed(i,j)=is_feature_allowed(expr_tmp,pf_allowed)
+      end do
+      if(.not. any(dim_feature_allowed(i,:))) then
+         if(mpirank==0) print *,'Error: no features left after constrain_pf filtering for dimension ',i
+         stop
+      end if
+   end do
+   deallocate(pf_allowed)
+end if
+
 if(fix_descriptor) then
    if(.not. allocated(fix_desc_idx)) then
       print *,'Error: fix_desc_idx not allocated.'; stop
    end if
    if(mpirank==0) then
       do k=1,n_fix_desc
+         if(fix_desc_dim(k)/=iFCDI) cycle
          if(fix_desc_idx(k)==0) then
             do i=1,nf_DI
                if(trim(expr(i))==trim(fix_desc_expr(k))) then
@@ -130,27 +154,15 @@ if(fix_descriptor) then
       end do
    end if
    call mpi_bcast(fix_desc_idx,n_fix_desc,mpi_integer,0,mpi_comm_world,mpierr)
-   if(any(fix_desc_idx==0)) stop
-
-   if(n_constrain_desc>0 .and. mpirank==0) then
-      do f=1,n_fix_desc
-         do i=1,n_constrain_desc
-            if(constrain_desc_dim(i)==fix_desc_dim(f)) then
-               if(fix_desc_idx(f)<constrain_feat_lo(i) .or. fix_desc_idx(f)>constrain_feat_hi(i)) then
-                  write(*,'(a,i4,a,i8,a,i8)') 'Error: fixed descriptor in dim ',fix_desc_dim(f), &
-                      ' is outside allowed range [',constrain_feat_lo(i),',',constrain_feat_hi(i),']'
-                  stop
-               end if
-            end if
-         end do
-      end do
-   end if
-end if
-
-if(n_constrain_desc>0) then
-   do f=1,n_constrain_desc
-      if(constrain_feat_hi(f)>nf_DI) then
-         if(mpirank==0) print *,'Error: constrain_feat_ranges exceed nf_DI.'
+   if(any(fix_desc_dim==iFCDI .and. fix_desc_idx==0)) stop
+   ! fixed descriptor must also satisfy per-dimension allowlist, otherwise abort
+   do k=1,n_fix_desc
+      if(fix_desc_dim(k)>iFCDI) cycle
+      if(.not. dim_feature_allowed(fix_desc_dim(k),fix_desc_idx(k))) then
+         if(mpirank==0) then
+            write(*,'(a,i3,a,a)') 'Error: fixed descriptor violates constrain_pf for dimension ', &
+                 fix_desc_dim(k),': ',trim(fix_desc_expr(k))
+         end if
          stop
       end if
    end do
@@ -423,8 +435,7 @@ deallocate(yinput)
 deallocate(expr)
 deallocate(activeset)
 deallocate(weight)
-if(allocated(keep_id)) deallocate(keep_id)
-if(allocated(pf_allowed)) deallocate(pf_allowed)
+if(allocated(dim_feature_allowed)) deallocate(dim_feature_allowed)
 
 call mpi_barrier(mpi_comm_world,mpierr)
 if(mpirank==0) then
@@ -433,6 +444,30 @@ if(mpirank==0) then
 end if
 
 end subroutine
+
+
+logical function is_feature_allowed(expr,pf_allowed)
+! check if expression only uses allowed primary features
+character(len=*),intent(in):: expr
+logical,intent(in):: pf_allowed(:)
+integer i
+
+is_feature_allowed=.true.
+do i=1,nsf
+   if(len_trim(pfname(i))==0) cycle
+   if(index(expr,trim(pfname(i)))>0) then
+      if(i>size(pf_allowed)) then
+         is_feature_allowed=.false.
+         return
+      end if
+      if(.not. pf_allowed(i)) then
+         is_feature_allowed=.false.
+         return
+      end if
+   end if
+end do
+
+end function
 
 
 subroutine ensure_fixed_descriptor_active(nactive,activeset)
@@ -468,17 +503,13 @@ select_metric(max(nmodel,1)),mcoeff(max(nmodel,1),iFCDI+1,ntask),sc_beta(iFCDI,2
 sc_intercept(2**iFCDI,ntask),sc_tmp(2**iFCDI),sc_tmp2(2**iFCDI),mpicollect(mpisize)
 character expr(:)*200,line_name*100
 logical isgood,use_fixed
-logical isgood,use_fixed
 real   progress
 integer model_ids(iFCDI)
 real*8 coeff_store(iFCDI,ntask)
 integer f
-integer model_ids(iFCDI)
-real*8 coeff_store(iFCDI,ntask)
-integer f
+integer temp_ids(iFCDI)
 
 if(nmodel<1) nmodel=1
-use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 
    progress=0.2
@@ -513,32 +544,30 @@ use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
       nlower=sum(njob(:mpirank))+1
       nupper=sum(njob(:mpirank+1))
       123 continue 
-      nrecord=nrecord+1
-      if( nrecord< nlower) goto 124   ! my job starts at nlower
-      if( nrecord> nupper) exit       ! my job ends at nupper
+   nrecord=nrecord+1
+   if( nrecord< nlower) goto 124   ! my job starts at nlower
+   if( nrecord> nupper) exit       ! my job ends at nupper
 
       if(float(nrecord-nlower+1)/float(njob(mpirank+1))>=progress) then
        do while( float(nrecord-nlower+1)/float(njob(mpirank+1))>= (progress+0.2) )
               progress = progress+0.2
        end do
-       write(*,'(a,i4,a,i4,a,f6.1,a)') 'dimension =',iFCDI,'   mpirank = ',mpirank,'   progress =',progress*100,'%'
-        progress=progress+0.2
-      end if
-      
+      write(*,'(a,i4,a,i4,a,f6.1,a)') 'dimension =',iFCDI,'   mpirank = ',mpirank,'   progress =',progress*100,'%'
+       progress=progress+0.2
+   end if
+      ! reorder ids according to fixed descriptors, then enforce per-dimension constraints
+      temp_ids=activeset(ii(:iFCDI))
+      call reorder_fixed_descriptor_ids(temp_ids)
+      do f=1,iFCDI
+         if(.not. dim_feature_allowed(f,temp_ids(f))) goto 124
+      end do
+
       if(use_fixed) then
          do f=1,n_fix_desc
             if(fix_desc_dim(f)>iFCDI) cycle
             if(.not. any(activeset(ii(:iFCDI))==fix_desc_idx(f))) goto 124
          end do
       end if
-      if(n_constrain_desc>0) then
-         do f=1,n_constrain_desc
-            if(constrain_desc_dim(f)>iFCDI) cycle
-            if(.not. (activeset(ii(constrain_desc_dim(f)))>=constrain_feat_lo(f) .and. &
-                      activeset(ii(constrain_desc_dim(f)))<=constrain_feat_hi(f))) goto 124
-         end do
-      end if
-
       if ( trim(adjustl(metric))=='RMSE' .or. trim(adjustl(metric))=='MaxAE') then
          do i=1,ntask
             if(.not. scmt) then
@@ -835,17 +864,13 @@ character expr(:)*200,line_name*100
 integer*8 njob(mpisize),mpii,mpij
 real*8 mpicollect(mpisize,2)
 logical isoverlap,use_fixed
-logical isoverlap,use_fixed
 real progress
 integer,allocatable:: triangles(:,:)
 integer model_ids(iFCDI)
 integer f
-integer model_ids(iFCDI)
-integer f
+integer temp_ids(iFCDI)
 
 if(nmodel<1) nmodel=1
-
-use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 
 use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 
@@ -893,21 +918,18 @@ use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
         write(*,'(a,i4,a,i4,a,f6.1,a)') 'dimension =',iFCDI,'   mpirank =',mpirank,'   progress =',progress*100,'%'
         progress=progress+0.2
       end if
-      
+      temp_ids=activeset(ii(:iFCDI))
+      call reorder_fixed_descriptor_ids(temp_ids)
+      do f=1,iFCDI
+         if(.not. dim_feature_allowed(f,temp_ids(f))) goto 124
+      end do
+
       if(use_fixed) then
          do f=1,n_fix_desc
             if(fix_desc_dim(f)>iFCDI) cycle
             if(.not. any(activeset(ii(:iFCDI))==fix_desc_idx(f))) goto 124
          end do
       end if
-      if(n_constrain_desc>0) then
-         do f=1,n_constrain_desc
-            if(constrain_desc_dim(f)>iFCDI) cycle
-            if(.not. (activeset(ii(constrain_desc_dim(f)))>=constrain_feat_lo(f) .and. &
-                      activeset(ii(constrain_desc_dim(f)))<=constrain_feat_hi(f))) goto 124
-         end do
-      end if
-
       ! initialization
       overlap_n=0
       overlap_size=0.d0
@@ -1192,93 +1214,6 @@ call mpi_barrier(mpi_comm_world,mpierr)
 end subroutine
 
 
-subroutine reorder_fixed_descriptor(ids,coeff)
-! reorder ids/coeff so the fixed descriptor sits at the required dimension
-integer, intent(inout):: ids(:)
-real*8, intent(inout):: coeff(:,:)
-integer ndim,src,j,f,pos_fixed
-integer temp_ids(size(ids))
-real*8 temp_coeff(size(ids),size(coeff,2))
-logical used_temp(size(ids)),used_pos(size(ids))
-
-if(.not. fix_descriptor) return
-ndim=size(ids)
-temp_ids=ids
-temp_coeff=coeff
-used_temp=.false.
-used_pos=.false.
-
-do f=1,n_fix_desc
-   if(fix_desc_dim(f)>ndim) cycle
-   pos_fixed=0
-   do j=1,ndim
-      if(temp_ids(j)==fix_desc_idx(f)) then
-         pos_fixed=j
-         exit
-      end if
-   end do
-   if(pos_fixed==0) cycle
-   ids(fix_desc_dim(f))=temp_ids(pos_fixed)
-   coeff(fix_desc_dim(f),:)=temp_coeff(pos_fixed,:)
-   used_temp(pos_fixed)=.true.
-   used_pos(fix_desc_dim(f))=.true.
-end do
-
-src=1
-do j=1,ndim
-   if(used_pos(j)) cycle
-   do while(src<=ndim .and. used_temp(src))
-      src=src+1
-   end do
-   if(src>ndim) exit
-   ids(j)=temp_ids(src)
-   coeff(j,:)=temp_coeff(src,:)
-   used_temp(src)=.true.
-end do
-
-end subroutine
-
-
-subroutine reorder_fixed_descriptor_ids(ids)
-! reorder ids without coefficients
-integer, intent(inout):: ids(:)
-integer ndim,pos_fixed,src,j,f
-integer temp_ids(size(ids))
-logical used_temp(size(ids)),used_pos(size(ids))
-
-if(.not. fix_descriptor) return
-ndim=size(ids)
-temp_ids=ids
-used_temp=.false.
-used_pos=.false.
-
-do f=1,n_fix_desc
-   if(fix_desc_dim(f)>ndim) cycle
-   pos_fixed=0
-   do j=1,ndim
-      if(temp_ids(j)==fix_desc_idx(f)) then
-         pos_fixed=j
-         exit
-      end if
-   end do
-   if(pos_fixed==0) cycle
-   ids(fix_desc_dim(f))=temp_ids(pos_fixed)
-   used_temp(pos_fixed)=.true.
-   used_pos(fix_desc_dim(f))=.true.
-end do
-
-src=1
-do j=1,ndim
-   if(used_pos(j)) cycle
-   do while(src<=ndim .and. used_temp(src))
-      src=src+1
-   end do
-   if(src>ndim) exit
-   ids(j)=temp_ids(src)
-   used_temp(src)=.true.
-end do
-
-end subroutine
 
 
 subroutine reorder_fixed_descriptor(ids,coeff)

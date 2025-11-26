@@ -1,0 +1,87 @@
+****************************************************************
+  Sure Independence Screening and Sparsifying Operator (SISSO)  
+             Version SISSO.3.5, August, 2024.                
+****************************************************************
+
+Read in data from train.dat
+Standard Deviation (sqrt[sum(y-y_mean)^2/n]) of the target property:   0.21703
+Read in data from SISSO.in
+Property type:     1
+Number of tasks:        1
+Descriptor dimension:        3
+Fixed descriptors:
+  Dim        1: (ENH3)
+Primary feature constraints per descriptor dimension (train.dat columns allowed):
+  Dim        2: [       9,      11]
+  Dim        3: [       5,       7]
+Number of samples for the task(s):    105
+Restarts :  0
+Scheme for feature storing in memory:        1
+Number of scalar features:       11
+Tier of the feature space (max depth of expression tree):        1
+Maximal feature complexity (number of operators in a feature):        1
+Unit of input primary feature, each represented by a row vector: 
+    1.00    0.00    0.00    0.00    0.00    0.00
+    0.00    1.00    0.00    0.00    0.00    0.00
+    0.00    0.00    1.00    0.00    0.00    0.00
+    0.00    0.00    1.00    0.00    0.00    0.00
+    0.00    0.00    0.00    1.00    0.00    0.00
+    0.00    0.00    0.00    1.00    0.00    0.00
+    0.00    0.00    0.00    1.00    0.00    0.00
+    0.00    0.00    0.00    0.00    1.00    0.00
+    0.00    0.00    0.00    0.00    0.00    1.00
+    0.00    0.00    0.00    0.00    0.00    1.00
+    0.00    0.00    0.00    0.00    0.00    1.00
+The feature will be discarded if the minimum of the maximal abs. value in it <    0.10000E-02
+The faature will be discarded if the maximum of the maximal abs. value in it >     0.10000E+06
+Size of the SIS-selected (single) subspace :  50000 50000 50000
+Operators for feature construction: (+)(-)(*)(/)(exp)(exp-)(^-1)(^2)(^3)(sqrt) 
+Method for sparse regression:  L0        
+Fitting intercept:      T
+Metric for model selection: RMSE
+Number of the top-ranked models to output:     2000
+--------------------------------------------------------------------------------
+
+Dimension:   1
+-------------------
+Feature Construction (FC) starts ...
+Total number of features in the space Phi00:             11
+Total number of features in the space Phi01:            251
+Size of the SIS-selected subspace from Phi01:        243
+Time (second) used for this FC:            0.03
+
+Descriptor Identification (DI) starts ...
+Total number of SIS-selected features for this DI:        243
+Time (second) used for this DI:            0.01
+
+Dimension:   2
+-------------------
+Feature Construction (FC) starts ...
+The whole feature-space has been selected! No more FC will be performed.
+
+Descriptor Identification (DI) starts ...
+Total number of SIS-selected features for this DI:        243
+Time (second) used for this DI:            0.01
+
+Dimension:   3
+-------------------
+Feature Construction (FC) starts ...
+The whole feature-space has been selected! No more FC will be performed.
+
+Descriptor Identification (DI) starts ...
+Total number of SIS-selected features for this DI:        243
+ 
+  3D descriptor/model(y=sum(ci*di)+c0) : 
+================================================================================
+     d001 = (ENH3)    feature_ID:000025
+     d002 = (ENH3/DIF)    feature_ID:000002
+     d003 = (DI)^-1    feature_ID:000045
+ 
+        coeff.(ci):     0.1147053578E+01   -0.1951471974E+01   -0.7693312523E+01
+                c0:     0.1934485381E+01
+    RMSE and MaxAE:     0.7186023167E-01    0.2127178575E+00
+================================================================================
+Time (second) used for this DI:            0.03
+Total time (second):            0.08
+Have a nice day !    
+
