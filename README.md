@@ -1,80 +1,54 @@
-Version SISSO.3.5, August, 2024.   
-This code is licensed under the Apache License, Version 2.0  
+# SISSO: Fixed Descriptors & Per-Dimension Feature Constraints
 
-If you are using this code, please cite:   
-R. Ouyang, S. Curtarolo, E. Ahmetcik, M. Scheffler, and L. M. Ghiringhelli, Phys. Rev. Mater. 2, 083802 (2018).  
+本分支在 SISSO 3.5 的基础上新增了两项可选功能，便于在多维描述符搜索中精确控制特征来源：
 
-Key update in v3.5: Implementation of representing features in memory by S-expression tree.      
-In all previous versions, features are stored in memory by data. Now, user can choose which scheme to use by specifying fstore =1 (features stored by data) or fstore=2 ( features stored by expression tree) in SISSO.in. 'fstore=1' is fast but high
-memory demand; 'fstore=2' is low memory demand but could be several times slower than the former. Therefore, if you meet memory bottleneck because of large dataset (e.g. >5K), then set 'fstore=2'; otherwise, use 'fstore=1'. To give a feel on this, a performance comparison is shown in the SISSO_Guide.pdf at the introduction of the keyword 'fstore'.
+1) 固定描述符（fix_descriptor）
+2) 按描述符维度限制主特征采样（constrain_pf）
 
+## 1. 固定描述符
 
-Features   
---------
-- Regression & Classification    
-  Ref.: [R. Ouyang et al., Phys. Rev. Mater. 2, 083802 (2018)]   
-- Multi-Task Learning (MT-SISSO)    
-  Ref.: [R. Ouyang et al., J. Phys.: Mater. 2, 024002 (2019)]      
-        [J. Wang et al., J. Am. Chem. Soc. 145, 11457 (2023)]  
-- Variables Selection assisted Symbolic Regression (VS-SISSO, see the VarSelect.py in 'utilities')   
-  Ref.: [Z. Guo et al., J. Chem. Theory Comput. 18, 4945 (2022)]
-
-(See the Refs. and the SISSO_guide.pdf for more details in using the code)  
+- 作用：强制某些表达式出现在指定的描述符维度，模型搜索时不会被淘汰或换位。
+- 配置：
+fix_desc_dims=(1,3) ! 要固定的维度序号（从 1 开始）
+fix_desc_exprs=(ENH3, (DI)^-1) ! 对应维度的表达式字符串，需与 Uspace.expressions 中一致
 
 
-Installation
-------------
-A Fortran mpi compiler is required to compile the SISSO parallel program. Below are two options for compiling the program using an IntelMPI compiler (other compilers may work as well). In the folder 'src', do:    
-(1)  mpiifort -fp-model precise var_global.f90 libsisso.f90 DI.f90 FC.f90 FCse.f90 SISSO.f90 -o ~/bin/SISSO    
-(2)  mpiifort -O2 var_global.f90 libsisso.f90 DI.f90 FC.f90 FCse.f90 SISSO.f90 -o ~/bin/SISSO    
-  
-Note:
-- option (1) enables better accuracy and run-to-run reproducibility of floating-point calculations; (2) is ~ 2X faster 
-  than (1) but tiny run-to-run variations may happen between processors of different types, e.g. Intel and AMD.   
-- if 'mpi' related errors present during the compilation, try opening the file 'var_global.f90' and replace
-  the line "use mpi" with "include 'mpif.h'". However, " use mpi " is strongly encouraged 
-  (see https://www.mpi-forum.org/docs/mpi-3.1/mpi31-report/node411.htm).
+- 运行期行为：
+- DI 会先在 `SIS_subspaces/Uspace.expressions` 中定位这些表达式的特征 ID。
+- 在 L0 组合时，固定特征被强制加入活跃集，并在输出前按指定维度重排。
+- 若固定表达式不符合当前维度的特征约束（见下文），会直接报错并终止。
 
-Modules of the program:  
-- var_global.f90     ! declaring the global variables
-- libsisso.f90       ! subroutines and functions for mathematical operations
-- DI.f90             ! model sparsification (descriptor identification)
-- FC.f90             ! feature construction with features stored in memory as numerical data
-- FCse.f90           ! feature construction with features stored in memory as expression tree
-- SISSO.f90          ! the main program
+## 2. 按维度限制主特征采样（constrain_pf）
+
+- 作用：为每个描述符维度限定可使用的原始特征列（train.dat 的列号）。
+- 配置：
+constrain_pf_dims=(1,2,3) ! 需要约束的维度列表
+constrain_pf_ranges=(5 7)(9 11)(2 4) ! 与上面维度一一对应的闭区间 [lo, hi]
 
 
-Running SISSO
--------------
-Input Files: SISSO.in and train.dat, whose templates can be found in the folder input_templates.  
-Note that the input templates may be different from version to version. Thus, it is always recommended to take the corresponding input templates from the package where the code is in use.
+- 每个区间只能有两个数字（lo hi），空格或逗号分隔均可。
+- 列号按 train.dat 中的主特征顺序编号；回归时从第 3 列起为原始特征。
+- 运行期行为：
+- DI 读取 Uspace.expressions 后，为每个维度构建“允许特征”表，不删除原有特征 ID。
+- 在模型组合时，对第 k 维的候选特征先重排固定描述符，再检查是否在该维度允许集合内；不符合直接跳过组合。
+- 若某维度的约束把可用特征筛空，会报错。
 
-Command-line usage:   
- SISSO > log  ! You may need to remove resource limit first by running the command 'ulimit -s unlimited'  
-Runnig on clusters:     
-Put command in your submission script, e.g.: mpirun -np number_of_cores SISSO >log    
+## 使用示例
 
-Primary Output Files: 
-- File "SISSO.out": overall information from feature construction to model building
-- Folder "Models": list of the top ranked models, and the data for the top-1 model (the one shown in SISSO.out)
-- Folder "SIS_subspaces": SIS-selected subspaces (feature data and expressions)
-
-
-User guide
-----------
-More details on using this code can be found in the SISSO_guide.pdf
+3 维回归，固定第一维为 ENH3，第二维只用列 9–11，第三维只用列 5–7：
+desc_dim=3
+fix_desc_dims=(1)
+fix_desc_exprs=(ENH3)
+constrain_pf_dims=(2,3)
+constrain_pf_ranges=(9 11)(5 7)
 
 
-About
-------
-Created and maintained by Runhai Ouyang. Please feel free to open issues in the Github or contact Ouyang  
-(rouyang@shu.edu.cn) in case of any problems/comments/suggestions in using the code. 
 
+## 运行与输出检查
 
-Other SISSO-related codes
--------------------------
-SISSO++: https://gitlab.com/sissopp_developers/sissopp    
-MATLAB: https://github.com/NREL/SISSORegressor_MATLAB  
-Python interface: https://github.com/Matgenix/pysisso  
-
-
+- 设置 `restart=0` 重新开始，清理旧的 `CONTINUE/Models/SIS_subspaces`。
+- `SISSO.out` 会打印：
+  - Fixed descriptors 列表
+  - 每个维度的 Primary feature constraints
+- 若固定描述符未找到或违反约束，会在 DI 阶段报错退出。
+- `Models/*/toprank*` 中的特征 ID 按最终维度顺序排列，固定维度的特征应与配置一致，每个维度的特征来源应落在对应区间生成的
