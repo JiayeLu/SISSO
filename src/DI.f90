@@ -31,7 +31,9 @@ character line*500
 character,allocatable:: expr(:)*200
 logical isnew,dat_readerr
 integer needed_fix
-integer f
+integer,allocatable:: keep_id(:)
+logical,allocatable:: pf_allowed(:)
+character(len=200) expr_tmp
 
 if(mpirank==0) mytime.sDI=mpi_wtime()
    maxns=maxval(nsample)
@@ -394,6 +396,7 @@ if(trim(adjustl(method_so))=='L1L0' .and. nf_DI > nf_L0 .and. ptype==1) then
     deallocate(lassormse)
     if(mpirank==0) write(9,'(a)') ' L1 finished ! '
     call ensure_fixed_descriptor_active(nactive,activeset)
+    call ensure_fixed_descriptor_active(nactive,activeset)
     !---------------
     ! L0 of the L1L0
     !---------------
@@ -404,6 +407,7 @@ else if (trim(adjustl(method_so))=='L0' .or. nf_DI==nf_L0) then
     do i=1,nf_L0
        activeset(i)=i
     end do
+    call ensure_fixed_descriptor_active(nactive,activeset)
     call ensure_fixed_descriptor_active(nactive,activeset)
     if(ptype==1) then
      call model(xinput,yinput,expr,nactive,activeset)
@@ -419,6 +423,8 @@ deallocate(yinput)
 deallocate(expr)
 deallocate(activeset)
 deallocate(weight)
+if(allocated(keep_id)) deallocate(keep_id)
+if(allocated(pf_allowed)) deallocate(pf_allowed)
 
 call mpi_barrier(mpi_comm_world,mpierr)
 if(mpirank==0) then
@@ -462,12 +468,17 @@ select_metric(max(nmodel,1)),mcoeff(max(nmodel,1),iFCDI+1,ntask),sc_beta(iFCDI,2
 sc_intercept(2**iFCDI,ntask),sc_tmp(2**iFCDI),sc_tmp2(2**iFCDI),mpicollect(mpisize)
 character expr(:)*200,line_name*100
 logical isgood,use_fixed
+logical isgood,use_fixed
 real   progress
+integer model_ids(iFCDI)
+real*8 coeff_store(iFCDI,ntask)
+integer f
 integer model_ids(iFCDI)
 real*8 coeff_store(iFCDI,ntask)
 integer f
 
 if(nmodel<1) nmodel=1
+use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 
    progress=0.2
@@ -619,16 +630,28 @@ use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
          end if
          call reorder_fixed_descriptor(model_ids,coeff_store)
          select_model(loc(1),:iFCDI)=model_ids
+         model_ids=activeset(ii(:iFCDI))
+         if(scmt) then
+            do i=1,ntask
+               coeff_store(:,i)=sc_beta(:iFCDI,sc_loc(1),i)
+            end do
+         else
+            coeff_store=beta(:iFCDI,:)
+         end if
+         call reorder_fixed_descriptor(model_ids,coeff_store)
+         select_model(loc(1),:iFCDI)=model_ids
          select_score(loc(1),1,1)=tmp
          select_score(loc(1),2,1)=tmp2
          do i=1,ntask
              if( scmt ) then
                select_coeff(loc(1),1,i)=sc_intercept(sc_loc(1),i)
                select_coeff(loc(1),2:iFCDI+1,i)=coeff_store(:,i)
+               select_coeff(loc(1),2:iFCDI+1,i)=coeff_store(:,i)
                select_score(loc(1),1,1+i)=sc_rmse(sc_loc(1),i)
                select_score(loc(1),2,1+i)=sc_maxae(sc_loc(1),i)
              else
                select_coeff(loc(1),1,i)=intercept(i)
+               select_coeff(loc(1),2:iFCDI+1,i)=coeff_store(:,i)
                select_coeff(loc(1),2:iFCDI+1,i)=coeff_store(:,i)
                select_score(loc(1),1,1+i)=rmse(i)
                select_score(loc(1),2,1+i)=maxae(i)
@@ -812,12 +835,17 @@ character expr(:)*200,line_name*100
 integer*8 njob(mpisize),mpii,mpij
 real*8 mpicollect(mpisize,2)
 logical isoverlap,use_fixed
+logical isoverlap,use_fixed
 real progress
 integer,allocatable:: triangles(:,:)
 integer model_ids(iFCDI)
 integer f
+integer model_ids(iFCDI)
+integer f
 
 if(nmodel<1) nmodel=1
+
+use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 
 use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
 
@@ -992,6 +1020,9 @@ use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
       model_ids=activeset(ii(:iFCDI))
       call reorder_fixed_descriptor_ids(model_ids)
 
+      model_ids=activeset(ii(:iFCDI))
+      call reorder_fixed_descriptor_ids(model_ids)
+
       ! store the good models 
       if (any(overlap_n<select_overlap_n)) then
          totalm=totalm+1
@@ -999,11 +1030,13 @@ use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
          select_overlap_n(loc(1))=overlap_n
          select_overlap_size(loc(1))=overlap_size
          select_model(loc(1),:iFCDI)=model_ids
+         select_model(loc(1),:iFCDI)=model_ids
       else if (overlap_n==maxval(select_overlap_n) .and. any(overlap_size<select_overlap_size) )  then
          totalm=totalm+1
          loc=maxloc(select_overlap_size)
          select_overlap_n(loc(1))=overlap_n
          select_overlap_size(loc(1))=overlap_size
+         select_model(loc(1),:iFCDI)=model_ids         
          select_model(loc(1),:iFCDI)=model_ids         
       end if
 
@@ -1156,6 +1189,95 @@ use_fixed = fix_descriptor .and. any(fix_desc_dim<=iFCDI)
    end if
 
 call mpi_barrier(mpi_comm_world,mpierr)
+end subroutine
+
+
+subroutine reorder_fixed_descriptor(ids,coeff)
+! reorder ids/coeff so the fixed descriptor sits at the required dimension
+integer, intent(inout):: ids(:)
+real*8, intent(inout):: coeff(:,:)
+integer ndim,src,j,f,pos_fixed
+integer temp_ids(size(ids))
+real*8 temp_coeff(size(ids),size(coeff,2))
+logical used_temp(size(ids)),used_pos(size(ids))
+
+if(.not. fix_descriptor) return
+ndim=size(ids)
+temp_ids=ids
+temp_coeff=coeff
+used_temp=.false.
+used_pos=.false.
+
+do f=1,n_fix_desc
+   if(fix_desc_dim(f)>ndim) cycle
+   pos_fixed=0
+   do j=1,ndim
+      if(temp_ids(j)==fix_desc_idx(f)) then
+         pos_fixed=j
+         exit
+      end if
+   end do
+   if(pos_fixed==0) cycle
+   ids(fix_desc_dim(f))=temp_ids(pos_fixed)
+   coeff(fix_desc_dim(f),:)=temp_coeff(pos_fixed,:)
+   used_temp(pos_fixed)=.true.
+   used_pos(fix_desc_dim(f))=.true.
+end do
+
+src=1
+do j=1,ndim
+   if(used_pos(j)) cycle
+   do while(src<=ndim .and. used_temp(src))
+      src=src+1
+   end do
+   if(src>ndim) exit
+   ids(j)=temp_ids(src)
+   coeff(j,:)=temp_coeff(src,:)
+   used_temp(src)=.true.
+end do
+
+end subroutine
+
+
+subroutine reorder_fixed_descriptor_ids(ids)
+! reorder ids without coefficients
+integer, intent(inout):: ids(:)
+integer ndim,pos_fixed,src,j,f
+integer temp_ids(size(ids))
+logical used_temp(size(ids)),used_pos(size(ids))
+
+if(.not. fix_descriptor) return
+ndim=size(ids)
+temp_ids=ids
+used_temp=.false.
+used_pos=.false.
+
+do f=1,n_fix_desc
+   if(fix_desc_dim(f)>ndim) cycle
+   pos_fixed=0
+   do j=1,ndim
+      if(temp_ids(j)==fix_desc_idx(f)) then
+         pos_fixed=j
+         exit
+      end if
+   end do
+   if(pos_fixed==0) cycle
+   ids(fix_desc_dim(f))=temp_ids(pos_fixed)
+   used_temp(pos_fixed)=.true.
+   used_pos(fix_desc_dim(f))=.true.
+end do
+
+src=1
+do j=1,ndim
+   if(used_pos(j)) cycle
+   do while(src<=ndim .and. used_temp(src))
+      src=src+1
+   end do
+   if(src>ndim) exit
+   ids(j)=temp_ids(src)
+   used_temp(src)=.true.
+end do
+
 end subroutine
 
 
