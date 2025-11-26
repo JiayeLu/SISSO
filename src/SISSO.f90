@@ -210,10 +210,13 @@ end subroutine
 
 !read in parameters from SISSO.in
 subroutine read_para_a
-integer i,j,k,l,ioerr
-character line_short*500        
+integer i,j,k,l,ioerr,dims_count,feat_count,ipos1,ipos2,pos,dim_id
+character line_short*500,restricted_dims_line*500,restricted_features_line*5000,temp_line*5000,block_line*5000
+integer,allocatable :: restricted_dims(:)
 
 open(fileunit,file='SISSO.in',status='old')
+restricted_dims_line=''
+restricted_features_line=''
 do while(.true.)
    read(fileunit,'(a)',iostat=ioerr) line_short
    if(ioerr<0) exit
@@ -274,6 +277,10 @@ do while(.true.)
    read(line_short(i+1:),*,err=1001) method_so
    case('fit_intercept')
    read(line_short(i+1:),*,err=1001) fit_intercept
+   case('restricted_dims')
+   read(line_short(i+1:),'(a)',err=1001) restricted_dims_line
+   case('restricted_features_dim')
+   read(line_short(i+1:),'(a)',err=1001) restricted_features_line
    case('L1para.max_iter')
    read(line_short(i+1:),*,err=1001) L1para.max_iter
    case('L1para.tole')
@@ -305,6 +312,62 @@ elseif(fcomplexity>3 .and. fcomplexity<=7 ) then
 rung=3
 elseif(fcomplexity>7 .and. fcomplexity<=15) then
 rung=4
+end if
+
+allocate(has_restriction(desc_dim))
+allocate(allowed_features_n(desc_dim))
+allocate(allowed_features(max_allowed_features,desc_dim))
+has_restriction=.false.
+allowed_features_n=0
+allowed_features=0
+
+if(len_trim(restricted_dims_line)>0) then
+   dims_count=1
+   do j=1,len_trim(restricted_dims_line)
+      if(restricted_dims_line(j:j)==',') dims_count=dims_count+1
+   end do
+   allocate(restricted_dims(dims_count))
+   temp_line=restricted_dims_line
+   call sepchange(temp_line)
+   read(temp_line,*,err=1001) restricted_dims
+
+   if(len_trim(restricted_features_line)==0) then
+      print *, 'Error: restricted_dims is set but restricted_features_dim is empty'; stop
+   end if
+
+   pos=1
+   do j=1,dims_count
+      dim_id=restricted_dims(j)
+      if(dim_id<1 .or. dim_id>desc_dim) then
+         print *, 'Error: restricted dimension index out of range: ',dim_id; stop
+      end if
+      has_restriction(dim_id)=.true.
+
+      ipos1=index(restricted_features_line(pos:), '(')
+      ipos2=index(restricted_features_line(pos:), ')')
+      if(ipos1==0 .or. ipos2==0 .or. ipos2<=ipos1) then
+         print *, 'Error: Cannot parse restricted_features_dim for dimension ',dim_id; stop
+      end if
+      ipos1=ipos1+pos-1
+      ipos2=ipos2+pos-1
+      block_line=restricted_features_line(ipos1+1:ipos2-1)
+      if(len_trim(block_line)==0) then
+         print *, 'Error: No features listed for restricted dimension ',dim_id; stop
+      end if
+
+      feat_count=1
+      do l=1,len_trim(block_line)
+         if(block_line(l:l)==',') feat_count=feat_count+1
+      end do
+      if(feat_count>max_allowed_features) then
+         print *, 'Error: Number of restricted features exceeds max_allowed_features'; stop
+      end if
+      call sepchange(block_line)
+      read(block_line,*,err=1001) allowed_features(:feat_count,dim_id)
+      allowed_features_n(dim_id)=feat_count
+      pos=ipos2+1
+   end do
+   deallocate(restricted_dims)
 end if
 
 return
@@ -514,6 +577,7 @@ subroutine output_para
 2002   format(*(f8.2))
 2003   format(a,i3.3,a,*(i5))
 2004   format(*(a))
+character(len=20) dim_label
    write(9,'(a)') 'Read in data from SISSO.in'
    write(9,'(a,i3)') 'Property type:   ',ptype
    write(9,'(a,i8)') 'Number of tasks: ',ntask
@@ -547,6 +611,17 @@ subroutine output_para
    write(9,'(a,e15.5)') 'The feature will be discarded if the minimum of the maximal abs. value in it <',fmax_min
    write(9,'(a,e15.5)') 'The faature will be discarded if the maximum of the maximal abs. value in it > ',fmax_max
    write(9,2001) 'Size of the SIS-selected (single) subspace : ',nf_sis(:desc_dim)
+   if(any(has_restriction)) then
+      write(9,'(a)') 'Descriptor-wise feature restrictions (by SIS feature index):'
+      do i=1,desc_dim
+         if(has_restriction(i)) then
+            write(dim_label,'(i0)') i
+            write(9,2001) '  Dim '//trim(dim_label)//': ',allowed_features(:allowed_features_n(i),i)
+         else
+            write(9,'(a,i3,a)') '  Dim ',i,': no restriction'
+         end if
+      end do
+   end if
    write(9,2004)  'Operators for feature construction: ',(trim(ops(j)),' ',j=1,rung)
 
    write(9,'(a,a)') 'Method for sparse regression:  ',method_so

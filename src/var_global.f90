@@ -42,5 +42,10 @@ real*8,allocatable:: target_y(:),pfdata(:,:),res(:),feature_units(:,:),ypred(:)
 character(len=30),allocatable:: pfname(:)
 integer   mpierr,mpirank,mpisize,status(MPI_STATUS_SIZE)
 
+! descriptor-wise feature restrictions
+integer, parameter :: max_allowed_features=10000
+logical, allocatable :: has_restriction(:)
+integer, allocatable :: allowed_features(:,:), allowed_features_n(:)
+
 end module 
 

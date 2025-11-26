@@ -431,6 +431,7 @@ if(nmodel<1) nmodel=1
       nrecord=nrecord+1
       if( nrecord< nlower) goto 124   ! my job starts at nlower
       if( nrecord> nupper) exit       ! my job ends at nupper
+      if(.not. combination_respects_restrictions(activeset,ii,iFCDI)) goto 124
 
       if(float(nrecord-nlower+1)/float(njob(mpirank+1))>=progress) then
        do while( float(nrecord-nlower+1)/float(njob(mpirank+1))>= (progress+0.2) )
@@ -756,6 +757,7 @@ if(nmodel<1) nmodel=1
 
       if( nrecord< nlower) goto 124
       if( nrecord> nupper) exit
+      if(.not. combination_respects_restrictions(activeset,ii,iFCDI)) goto 124
 
       if(float(nrecord-nlower+1)/float(njob(mpirank+1))>=progress) then
         do while( float(nrecord-nlower+1)/float(njob(mpirank+1))>= (progress+0.2))
@@ -1125,8 +1127,41 @@ logical inside,convexpair
    write(9,'(a)') 'Note: with negative, the magnitude means the min separation distance between domains.'
  end if
  write(9,'(a)')'================================================================================'
- 
+
 end subroutine
+
+
+logical function feature_allowed_for_dim(dim_index,feature_id)
+integer dim_index,feature_id,pos
+
+feature_allowed_for_dim=.true.
+if(.not. has_restriction(dim_index)) return
+
+feature_allowed_for_dim=.false.
+do pos=1,allowed_features_n(dim_index)
+   if(allowed_features(pos,dim_index)==feature_id) then
+      feature_allowed_for_dim=.true.
+      return
+   end if
+end do
+
+end function
+
+
+logical function combination_respects_restrictions(activeset,ii,ndim)
+integer activeset(:),ii(:),ndim,dim_index
+
+combination_respects_restrictions=.true.
+do dim_index=1,ndim
+   if(has_restriction(dim_index)) then
+      if(.not. feature_allowed_for_dim(dim_index,activeset(ii(dim_index)))) then
+         combination_respects_restrictions=.false.
+         return
+      end if
+   end if
+end do
+
+end function
 
 end module
 
