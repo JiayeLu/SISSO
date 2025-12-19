@@ -12,20 +12,25 @@
 
 
 module FCse
-! feature construction
-!----------------------------------------------------------------------
+!=======================================================================
+! 特征构造模块（FCse）
+! - 与 FC.f90 功能相同，但使用 S-expression 存储特征
+! - 适用于低内存/大特征空间场景
+!=======================================================================
 
 use var_global
 use libsisso
 implicit none
-! variables used by subroutines and functions in this module
+! 本模块内部使用的表达式与特征结构
 
 type Sexpression
+  ! S-expression：以列表形式保存表达式树
   integer list_id(Smaxlen),list_len,list_pointer(2,Smaxlen)  ! A list for each S-expression
   character list_var(Smaxlen)*30,list_op(Smaxlen)*10
 end type
 
 type feature
+  ! 生成特征的表达式/名称/单位等
   type(Sexpression),allocatable:: Sexpr(:)
   character(len=str_len),allocatable:: feat_name(:),lastop(:)*10
   integer*8,allocatable:: feat_comp(:)
@@ -33,6 +38,7 @@ type feature
 end type
 
 type feature_selected
+  ! SIS 筛选后的特征集合（S-expression 形式）
   integer*8 nselect
   type(Sexpression),allocatable:: Sexpr(:)
   real*8,allocatable:: feat_score(:,:)
@@ -41,6 +47,7 @@ type feature_selected
 end type
 
 type feature_sis
+  ! SIS 输出缓冲结构
   type(Sexpression),allocatable:: Sexpr(:)
   real*8,allocatable:: feat_score(:,:)
   character(len=str_len),allocatable:: feat_name(:)
@@ -59,6 +66,11 @@ contains
 
 
 subroutine feature_construction_se
+!-----------------------------------------------------------------------
+! 核心子程序：特征构造与 SIS 筛选（S-expression 形式）
+! 输入：全局变量 res/pfdata/pfname 等
+! 输出：SIS 子空间文件与表达式集合
+!-----------------------------------------------------------------------
 implicit none
 integer   loc(1),ioerr
 character line*500,phiname*5,reject_file_name*100,superline*(20*(1+sum(nf_sis(:desc_dim))))
@@ -72,7 +84,7 @@ type(feature) inp
 
 mpisync='Y'
 
-! Stop if the whole feature space had been selected.
+! 若特征空间已全部选完，则终止 FC
 IF (iFCDI>1 .and. nf_sis_avai(iFCDI-1)<nf_sis(iFCDI-1)) THEN
    if(mpirank==0) then
       write(*,'(a)') 'The whole feature-space has been selected! No more FC will be performed.' 
@@ -81,7 +93,7 @@ IF (iFCDI>1 .and. nf_sis_avai(iFCDI-1)<nf_sis(iFCDI-1)) THEN
    return
 END IF
 
-! running time by FC
+! 记录 FC 用时
 if(mpirank==0) mytime.sFC=mpi_wtime()
 
 !------------------------------------------------------
@@ -110,7 +122,7 @@ allocate(sel.feat_score(2,j))
 allocate(sel.feat_name(j))
 allocate(sel.feat_comp(j))
 
-! initialization
+! 初始化特征容器与表达式
 !------------------
 trainy=res
 score_threshold=-1.0
@@ -120,22 +132,22 @@ inp.lastop=''     ! the last operation of the generated feature
 inp.feat_comp=0
 
 do i=1,nsf    
-  inp.Sexpr(i).list_id(1)=1   ! first entry of the list of expression i
-  inp.Sexpr(i).list_len=1   ! current list length
-  inp.Sexpr(i).list_op(1)='var'  ! is variable, no operation
-  inp.Sexpr(i).list_pointer(:,1)=0   ! the 2 operands specified by the pointer. No operand for variable
-  inp.Sexpr(i).list_var(1)=trim(adjustl(pfname(i)))  ! the variable name
+  inp.Sexpr(i).list_id(1)=1   ! 表达式首元素
+  inp.Sexpr(i).list_len=1   ! 当前表达式长度
+  inp.Sexpr(i).list_op(1)='var'  ! 原始变量，无操作符
+  inp.Sexpr(i).list_pointer(:,1)=0   ! 变量无操作数
+  inp.Sexpr(i).list_var(1)=trim(adjustl(pfname(i)))  ! 变量名
 end do
 
 
-! The 'tag' to be used by 'fID' during redundant check
+! 用于冗余检查的标签向量
 do j=1,ntask
 do i=1,nsample(j)    
   tag(sum(nsample(:j-1))+i)=1.0d0+0.001d0*i
 end do
 end do
 
-! avoid duplication in the selected space
+! 避免已选特征重复进入新一轮选择
 if(iFCDI>1) reject_file_name='SIS_subspaces/Uspace.expressions'
 
 nreject=0
@@ -1895,4 +1907,3 @@ end subroutine
 
 
 end module
-
