@@ -11,6 +11,11 @@
 ! limitations under the License.
 
 
+!=======================================================================
+! 主程序入口：SISSO 全流程驱动
+! - 依赖：var_global、libsisso、FCse、FC、DI 等模块
+! - 作用：初始化参数、读取输入/训练数据，迭代执行 FC 与 DI，输出结果
+!=======================================================================
 program SISSO
 
 use var_global
@@ -24,6 +29,7 @@ implicit none
 
 integer i,j,k,l,icontinue,iostatus,line_len
 character tcontinue*2,nsample_line*500,isconvex_line*500,funit_line*500,ops_line*500 !,sysdate*8,systime*10
+! tcontinue: CONTINUE 文件中的阶段标记（FC/DI）
 logical fexist
 
 call mpi_init(mpierr)
@@ -32,8 +38,8 @@ call mpi_comm_rank(mpi_comm_world,mpirank,mpierr)
 !---
 
 call random_seed()
-call initialization  ! parameters initialization
-call read_para_a     ! read from SISSO.in
+call initialization  ! 参数初始化
+call read_para_a     ! 从 SISSO.in 读取全局控制参数
 
 
 fileunit=100
@@ -52,21 +58,21 @@ if(mpirank==0) then
  write(9,'(a/)')'****************************************************************'
 end if
 
-allocate(nsample(ntask))  ! regression: number of samples for each task
-allocate(ngroup(ntask,1000))  ! classification: maximally 1000 groups inside each task
-allocate(isconvex(ntask,1000)) ! restricted to be convex domain for each data group?
-allocate(feature_units(nunit,nsf)) ! the units of features
-call read_para_b 
+allocate(nsample(ntask))  ! 回归：每个任务的样本数
+allocate(ngroup(ntask,1000))  ! 分类：每个任务最多 1000 个数据组
+allocate(isconvex(ntask,1000)) ! 每个数据组是否限制在凸域
+allocate(feature_units(nunit,nsf)) ! 特征单位矩阵
+call read_para_b  ! 读取与数据/特征相关的参数
 npoint=sum(nsample)
 
-allocate(target_y(npoint))   ! target property
-allocate(pfdata(npoint,nsf))  ! primary scalar features                                                    
-allocate(pfname(nsf)) ! primary-feature name
-allocate(res(npoint))   ! residual errors
-allocate(ypred(npoint))  ! fitted values at each dimension
+allocate(target_y(npoint))   ! 目标性质（训练标签）
+allocate(pfdata(npoint,nsf))  ! 原始特征矩阵
+allocate(pfname(nsf)) ! 原始特征名称
+allocate(res(npoint))   ! 残差（回归残差或分类中间量）
+allocate(ypred(npoint))  ! 预测值（每个维度/任务）
 
-line_len=1000+nsf*20 ! maximal line length in train.dat
-call read_data  ! from train.dat 
+line_len=1000+nsf*20 ! train.dat 最大行长度估计
+call read_data  ! 从 train.dat 读取训练数据
 if(mpirank==0) call output_para 
 
 
@@ -113,7 +119,7 @@ do iFCDI=icontinue,desc_dim
    end if
 
    if(iFCDI>icontinue .or. (iFCDI==icontinue .and. tcontinue=='FC') ) then
-     ! run FC
+     ! 运行特征构造（FC）
      if(mpirank==0) then
          write(*,'(a)') 'Feature Construction (FC) starts ...'
          write(9,'(a)') 'Feature Construction (FC) starts ...'
@@ -123,24 +129,24 @@ do iFCDI=icontinue,desc_dim
      if(iFCDI==1) then
        res=target_y
      else
-       if (ptype==1) res=target_y-ypred
-       if (ptype==2) res=ypred
+       if (ptype==1) res=target_y-ypred  ! 回归：残差
+       if (ptype==2) res=ypred           ! 分类：使用预测值
      end if
      call mpi_barrier(mpi_comm_world,mpierr)
      if(fstore==1) then
-         call feature_construction   ! Storing features by data (fast, high-memory demand)
+         call feature_construction   ! 以数据形式存储特征（快但占内存）
      else if(fstore==2) then        
-         call feature_construction_se   ! Storing features by S-expression (low-momery demand, slower)
+         call feature_construction_se   ! 以 S-表达式存储（省内存但更慢）
      end if
    end if
 
-   ! run DI
+   ! 运行描述符识别（DI）
    if(mpirank==0) then
         write(*,'(/a)') 'Descriptor Identification (DI) starts ...'
         write(9,'(/a)') 'Descriptor Identification (DI) starts ...'
    end if
 
-   nf_DI=sum(nf_sis_avai(:iFCDI))  ! SIS-selected features for DI
+   nf_DI=sum(nf_sis_avai(:iFCDI))  ! SIS 筛选后的特征数量
    if(mpirank==0) &
        write(9,'(a,i10)') 'Total number of SIS-selected features for this DI: ',sum(nf_sis_avai(:iFCDI))
    if(trim(adjustl(method_so))=='L0') then ! number of features for L0
@@ -151,7 +157,7 @@ do iFCDI=icontinue,desc_dim
 
    if(mpirank==0) call writeCONTINUE('DI')
    call mpi_barrier(mpi_comm_world,mpierr)
-   call descriptor_identification
+   call descriptor_identification  ! 选取最优描述符并拟合
 
    call flush(9)   !Flushes Fortran unit(s)
    call flush(6)
@@ -187,6 +193,9 @@ call mpi_finalize(mpierr)
 contains
 
 subroutine prepare4FC
+!-----------------------------------------------------------------------
+! 辅助例程：根据任务类型计算残差（用于下一轮 FC）
+!-----------------------------------------------------------------------
 if(iFCDI==1) then
   res=target_y
 else
@@ -649,5 +658,4 @@ character(len=20) dim_label
 end subroutine
 
 end program
-
 

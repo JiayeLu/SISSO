@@ -12,8 +12,11 @@
 
 
 module DI
-! descriptor identification
-!-------------------------------------------------------------
+!=======================================================================
+! 描述符识别模块（DI）
+! - 依赖：var_global、libsisso
+! - 作用：从 SIS 子空间中选择最优描述符，并进行稀疏回归/分类
+!=======================================================================
 use var_global
 use libsisso
 implicit none
@@ -21,6 +24,11 @@ implicit none
 contains
 
 subroutine descriptor_identification
+!-----------------------------------------------------------------------
+! 核心子程序：描述符识别（L0 或 L1L0 方案）
+! 输入：SIS 子空间数据（Uspace*.dat）与表达式列表
+! 输出：最优模型系数、误差统计与预测值
+!-----------------------------------------------------------------------
 real*8,allocatable:: xinput(:,:,:),yinput(:,:),beta(:,:),beta_init(:,:),coeff(:,:),xprime(:,:,:),&
         xdprime(:,:,:),xmean(:,:),norm_xprime(:,:),yprime(:,:),prod_xty(:,:),prod_xtx(:,:,:),lassormse(:),&
         ymean(:),intercept(:),weight(:,:)
@@ -31,7 +39,7 @@ character line*500
 character,allocatable:: expr(:)*200
 logical isnew,dat_readerr
 
-if(mpirank==0) mytime.sDI=mpi_wtime()
+if(mpirank==0) mytime.sDI=mpi_wtime()  ! 记录 DI 开始时间
    maxns=maxval(nsample)
 
 !--------------------------
@@ -42,7 +50,7 @@ allocate(weight(maxns,ntask))
 allocate(activeset(nf_L0))
 
 !---------------------------------
-! job allocation to the CPU cores
+! 任务在 MPI 进程间的列划分
 !---------------------------------
 allocate(ncol(mpisize))
 mpii=nf_DI/mpisize
@@ -57,7 +65,7 @@ end if
 end do
 
 !-----------------------
-! data read in
+! 读取 SIS 子空间数据
 !-----------------------
 
 dat_readerr=.true.
@@ -106,8 +114,7 @@ end if
 
 call mpi_bcast(expr,nf_DI*200,mpi_character,0,mpi_comm_world,mpierr)
 
-! argmin{sum(w_i*(y_i-bx_i)^2},e.g. https://en.wikipedia.org/wiki/Weighted_least_squares
-! one w_i corresponds to one (y_i-bx_i)
+! 加权最小二乘权重：每个样本对应一个 w_i
 weight=1.0
 
 ! weighted lasso
@@ -162,6 +169,9 @@ if(trim(adjustl(method_so))=='L1L0' .and. nf_DI > nf_L0 .and. ptype==1) then
     lassormse=0
     ymean=0
     
+    !-------------------------------------------------------------------------------------------------------
+    ! 数据标准化与预计算：将 y 与 x 变换到均值为 0、归一化的空间
+    ! 便于 LASSO 求解并提升数值稳定性
     !-------------------------------------------------------------------------------------------------------
     ! standardize and precompute the data for lasso
     ! transform y=a+xb into y'=x''b'; 
@@ -1164,4 +1174,3 @@ end do
 end function
 
 end module
-

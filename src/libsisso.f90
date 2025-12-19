@@ -12,7 +12,11 @@
 
 
 module libsisso
-!***********************************************************************
+!=======================================================================
+! 通用数学/优化工具库
+! - 为 FC/DI 提供线性代数、LASSO、几何计算与交叉验证等函数
+! - 多数例程为独立子程序/函数，可被多个模块复用
+!=======================================================================
 ! General subroutines/functions used by SISSO:
 ! ----------
 ! det: determinant of a given matrix
@@ -40,8 +44,9 @@ use mpi
 contains
 
 
-
-
+!-----------------------------------------------------------------------
+! 点到平面距离
+!-----------------------------------------------------------------------
 function dispp(p,a,b,c)
 ! Distance of a point from a plane
 ! input: a,b,c are the three points determing the plane, p is the point outside the plane.
@@ -53,6 +58,9 @@ dispp=abs(sum(normal*(p-a)))/sqrt(sum(normal**2))
 
 end function
 
+!-----------------------------------------------------------------------
+! 直线与平面交点
+!-----------------------------------------------------------------------
 function interlp(p1,p2,p3,p4,p5)
 ! intersection between a line and a plane
 ! input: p1,p2,p3 for determing the plane, p4 and p5 determing the line
@@ -77,7 +85,9 @@ interlp(2)=n*t+p4(2)
 interlp(3)=p*t+p4(3)
 end function
 
-
+!-----------------------------------------------------------------------
+! 判断点是否在三角形内（同平面）
+!-----------------------------------------------------------------------
 function intriangle(p,a,b,c)
 ! check if point p is inside the triangle formed by points a,b,c
 ! p,a,b,c are in the same plane
@@ -100,6 +110,9 @@ if(sum(normal_0*normal_1)>=0.d0 .and. sum(normal_0*normal_2)>=0.d0 .and. sum(nor
 end function
 
 
+!-----------------------------------------------------------------------
+! 字符串拆分工具
+!-----------------------------------------------------------------------
 subroutine string_split(instr,outstr,sp)
 ! break a string into sub-strings
 ! input: instr, string; sp, separator
@@ -139,6 +152,9 @@ end if
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 皮尔逊相关系数
+!-----------------------------------------------------------------------
 function corr(x,y)
 ! pearson's correlation
 ! input: vector x and y
@@ -154,6 +170,9 @@ sigmay=sqrt(sum((y-meany)**2)/m)
 corr=sum((x-meanx)*(y-meany))/(m*sigmax*sigmay)
 end function
 
+!-----------------------------------------------------------------------
+! 行列式计算（LU 分解）
+!-----------------------------------------------------------------------
 function det(mat)
 ! LU docomposition for sovling determinant of a matrix
 ! input: matrix mat
@@ -197,6 +216,9 @@ end do
 det=s
 end function
 
+!-----------------------------------------------------------------------
+! 矩阵求逆（基于 LU 分解）
+!-----------------------------------------------------------------------
 function inverse(mat)
 ! calculate the inverse of a given matrix
 ! input: the matrix mat
@@ -254,6 +276,9 @@ inverse=x
 
 end function
 
+!-----------------------------------------------------------------------
+! QR 分解
+!-----------------------------------------------------------------------
 subroutine qr_de(a,q,r)
 ! QR decomposition of input matrix a
 ! https://en.wikipedia.org/wiki/QR_decomposition
@@ -290,6 +315,11 @@ end do
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 正交分解最小二乘（带截距）
+! 输入：x/y 训练数据
+! 输出：回归系数 beta、RMSE
+!-----------------------------------------------------------------------
 subroutine orth_de(x,y,intercept,beta,rmse)
 ! linear least square fit to y=a+x*b by orthogonal decomposition
 ! input: matrix x,vector y; 
@@ -326,6 +356,9 @@ intercept=ymean-sum(xmean*beta)
 
 end subroutine
 
+!-----------------------------------------------------------------------
+! 正交分解最小二乘（无截距）
+!-----------------------------------------------------------------------
 subroutine orth_de_nointercept(x,y,beta,rmse)
 ! linear least square fit to y=x*b by orthogonal decomposition
 ! input: matrix x,vector y; 
@@ -356,6 +389,9 @@ end subroutine
 
 
 
+!-----------------------------------------------------------------------
+! 加权最小二乘（正交分解）
+!-----------------------------------------------------------------------
 subroutine worth_de(x,y,weight,intercept,beta,rmse,wrmse)
 ! weighted linear least sqaure
 implicit none
@@ -396,6 +432,9 @@ intercept=ymean-sum(xmean*beta)
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 常规最小二乘（不一定稳健）
+!-----------------------------------------------------------------------
 subroutine lls(x,y,intercept,beta,rmse)
 ! linear least square fit by the standard method
 ! input: matrix x, vector y
@@ -419,6 +458,9 @@ beta=beta0(2:n)
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 向量叉乘
+!-----------------------------------------------------------------------
 function crosspro(a,b)
 ! calculate the cross product: a x b
 ! input: vector a and b
@@ -429,6 +471,9 @@ crosspro(2)=a(3)*b(1)-a(1)*b(3);
 crosspro(3)=a(1)*b(2)-a(2)*b(1);
 end function
 
+!-----------------------------------------------------------------------
+! 归一化叉乘
+!-----------------------------------------------------------------------
 function crosspro_abnormalized(a,b)
 ! a and b are normalized before calculating their cross product
 real*8  a(3),b(3),aa(3),bb(3),crosspro_abnormalized(3),norma,normb
@@ -450,6 +495,9 @@ crosspro_abnormalized(3)=aa(1)*bb(2)-aa(2)*bb(1);
 end function
 
 
+!-----------------------------------------------------------------------
+! 单任务 LASSO（坐标下降）
+!-----------------------------------------------------------------------
 subroutine lasso(prod_xty,prod_xtx,lambda,max_iter,tole,beta_init,run_iter,beta,nf)
 ! min: f(beta)=1/2*||y-x*beta||**2 + lambda*||beta||_l1
 ! prod_xty=XtY; prod_xtx=XtX; max_iter:allowed max cycle; 
@@ -532,6 +580,9 @@ run_iter=i
 
 end subroutine
 
+!-----------------------------------------------------------------------
+! 多任务 LASSO（MPI 并行）
+!-----------------------------------------------------------------------
 subroutine mtlasso_mpi(prod_xty,prod_xtx,lambda,max_iter,tole,beta_init,run_iter,beta,nf,ncol)
 ! prod_xty=XtY; prod_xtx=XtX; max_iter:allowed max cycle; 
 ! tole: convergence criteria for cd to stop
@@ -688,6 +739,9 @@ run_iter=i
 
 end subroutine
 
+!-----------------------------------------------------------------------
+! 带符号约束的坐标下降（含截距）
+!-----------------------------------------------------------------------
 subroutine sc_coord_descent(x,y,max_iter,tole,dd,intercept,beta,rmse)
 ! sign-constrained coordinate descent method to solve y=a+x*b
 ! input: matrix x,vector y,max iteration:  max_iter,tolerance: tole, dimension: dd
@@ -758,6 +812,9 @@ end do
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 带符号约束的坐标下降（无截距）
+!-----------------------------------------------------------------------
 subroutine sc_coord_descent_nointercept(x,y,max_iter,tole,dd,beta,rmse)
 ! sign-constrained coordinate descent method to solve y=x*b
 ! input: matrix x,vector y,max iteration:  max_iter,tolerance: tole, dimension: dd
@@ -815,6 +872,9 @@ end do
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 坐标下降（含截距）
+!-----------------------------------------------------------------------
 subroutine coord_descent(x,y,max_iter,tole,intercept,beta,rmse) 
 ! coordinate descent method to solve y=a+x*b 
 ! input: matrix x,vector y, integer max_iter, real tole
@@ -869,6 +929,9 @@ intercept=ymean-sum(xmean*beta)
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! K 折交叉验证
+!-----------------------------------------------------------------------
 subroutine kfoldCV(x,y,random,fold,noise,CVrmse,CVmax)
 ! k-fold cross validation
 ! input: x, y, random, fold, noise
@@ -908,6 +971,9 @@ CVrmse=sqrt(sum((y([random])-pred)**2)/ns)  ! quadratic mean over samples
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 2D 凸包构建
+!-----------------------------------------------------------------------
 subroutine convex2D_hull(set,numb,hull)
 ! calculate the convex hull for a given data set
 ! input: set, a matrix N x 2
@@ -1000,6 +1066,9 @@ end do
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 3D 凸包构建
+!-----------------------------------------------------------------------
 subroutine convex3D_hull(set,ntri,triangles)
 ! find the convex hull by finding all the triangle facets
 ! input: set, a matrix N x 3
@@ -1362,6 +1431,9 @@ deallocate(edges)
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 2D 凸包重叠面积
+!-----------------------------------------------------------------------
 subroutine convex2d_overlap(set1,set2,bwidth,numb,area)
 ! counting the number of data and area in the overlapped region between two convex hulls
 ! input: data set 1, data set 2,bwidth(boundary tolerance)
@@ -1498,6 +1570,9 @@ end if
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 2D 凸包面积
+!-----------------------------------------------------------------------
 function convex2d_area(set)
 ! calculate the area of a 2d convex hull
 ! input: set, a matrix
@@ -1520,6 +1595,9 @@ if(area<1d-10) area=0.d0
 end function
 
 
+!-----------------------------------------------------------------------
+! 2D 凸包包含判定
+!-----------------------------------------------------------------------
 function convex2d_in(set1,set2,bwidth)
 ! check how many points of set2 are inside the hull of set1
 ! input: the data set forming the hull; the point; and boundary tolerence
@@ -1565,6 +1643,9 @@ end do
 
 end function
 
+!-----------------------------------------------------------------------
+! 2D 凸包间距
+!-----------------------------------------------------------------------
 function convex2d_dist(set1,set2)
 ! calculate the distance between two data sets (convex hulls)
 
@@ -1652,6 +1733,9 @@ end do
 end function
 
 
+!-----------------------------------------------------------------------
+! 1D 区间重叠长度
+!-----------------------------------------------------------------------
 subroutine convex1d_overlap(set1,set2,bwidth,numb,length)
 ! input: set1, set2, bwidth
 ! output: number of data, and the length, in the overlapped region
@@ -1681,6 +1765,9 @@ length=(min(maxval(set1),maxval(set2))-max(minval(set1),minval(set2)))
 end subroutine
 
 
+!-----------------------------------------------------------------------
+! 1D 区间包含判定
+!-----------------------------------------------------------------------
 function convex1d_in(set1,set2,bwidth)
 ! check how many data points of set2 are inside the segment by set1
 real*8 set1(:),set2(:),mini,maxi,bwidth
@@ -1699,6 +1786,9 @@ end do
 end function
 
 
+!-----------------------------------------------------------------------
+! 3D 凸包包含判定
+!-----------------------------------------------------------------------
 function convex3d_in(set1,set2,bwidth,ntri,triangles)
 ! check how many points of set2 are inside a 3d convex hull of set1
 ! input: the full data set1,set2, the boundary tolerence, and the hull-triangles
@@ -1796,6 +1886,9 @@ deallocate(inter_all)
 
 end function
 
+!-----------------------------------------------------------------------
+! 3D 凸包重叠体积
+!-----------------------------------------------------------------------
 subroutine convex3d_overlap(set1,set2,bwidth,numb)
 ! counting the number of overlap data
 ! input: data set 1, data set 2,bwidth(boundary tolerance)
@@ -1838,5 +1931,3 @@ end subroutine
 
 
 end module
-
-
