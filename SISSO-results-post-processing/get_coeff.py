@@ -11,23 +11,9 @@ import argparse
 import csv
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
-
+import math
 import mt_sisso_scatter as m
-
-
-def _prepare_expressions(uspace: Sequence[str], feature_ids: List[int], feature_cols: Sequence[str]):
-    prepared = []
-    for fid in feature_ids:
-        idx = fid - 1
-        if idx < 0 or idx >= len(uspace):
-            raise ValueError(f"Feature ID {fid} out of range for Uspace of size {len(uspace)}")
-        expr = uspace[idx]
-        prepared.append(m._prepare_expression(expr, feature_cols))
-    return prepared
-
-
-def _task_order(task_index: Dict[str, int]) -> List[str]:
-    return [t for t, _ in sorted(task_index.items(), key=lambda kv: kv[1])]
+import postprocess_utils as u
 
 
 def write_coeff_csv(path: Path, tasks: List[str], coeffs: List[List[float]]) -> None:
@@ -89,28 +75,33 @@ def main() -> None:
         help="输出 train 预测和贡献项的 CSV 路径",
     )
     args = parser.parse_args()
+    cfg = u.RunConfig(base=Path.cwd(), model_rank=args.model_rank)
+    outputs = u.compute_outputs(cfg)
+    task_index = outputs["task_index"] or u.build_task_index([])  # single task -> dummy
+    coeffs_df = outputs["coeffs"]
+    coeffs = coeffs_df[[c for c in coeffs_df.columns if c.startswith("c")]].values.tolist()
+    tasks = coeffs_df["task"].tolist()
 
-    base = Path.cwd()
-    train_path = base / "train.dat"
-    uspace_path = base / "SIS_subspaces" / "Uspace.expressions"
-    models_dir = base / "Models"
+    # train predictions are already computed
+    train_rows_df = outputs.get("train_preds")
+    if train_rows_df is None:
+        raise FileNotFoundError("train.dat not found")
 
-    model_path = m._find_first(models_dir, r"top\d+_D\d+")
-    coeff_path = m._find_first(models_dir, r"top\d+_D\d+_coeff")
+    # rebuild task_index for multi-task; in single-task use single entry
+    if outputs["single_job"]:
+        task_index = {"all": 0}
+    else:
+        task_index = u.build_task_index(train_rows_df["materials"].tolist())
+    # need prepared expressions again for contrib columns
+    headers, train_rows, _, _, _, _, _, _ = u.load_run_artifacts(cfg)
+    uspace = u.load_uspace(cfg.uspace_path)
+    feature_ids = outputs["feature_ids"]
+    prepared_exprs = []
+    for fid in feature_ids:
+        idx = fid - 1
+        expr = uspace[idx]
+        prepared_exprs.append(u.prepare_expression(expr, headers[1:]))
 
-    headers_train, train_rows = m._read_table(train_path)
-    feature_cols = headers_train[1:]  # 排除 materials
-
-    task_index = m._build_task_index(row["materials"] for row in train_rows)
-    tasks = _task_order(task_index)
-
-    uspace = m._load_uspace(uspace_path)
-    feature_ids = m._load_model_features(model_path, args.model_rank)
-    desc_dim = len(feature_ids)
-    coeffs = m._load_coefficients(coeff_path, args.model_rank, len(task_index), desc_dim)
-
-    prepared_exprs = _prepare_expressions(uspace, feature_ids, feature_cols)
-    print(prepared_exprs)
     write_coeff_csv(args.coeff_csv, tasks, coeffs)
     write_train_preds_csv(args.pred_csv, train_rows, task_index, prepared_exprs, coeffs)
     print(f"已写出系数: {args.coeff_csv}")

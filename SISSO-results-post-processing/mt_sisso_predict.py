@@ -29,6 +29,7 @@ from mt_sisso_scatter import (  # type: ignore
     _metrics,
     _prepare_expression,
     _read_table,
+    _read_sisso_config,
     _task_from_material,
 )
 
@@ -44,6 +45,42 @@ ALLOWED_FUNCS = {
     "tanh": math.tanh,
     "pow": pow,
 }
+
+
+def _safe_mape(pairs: List[Tuple[float, float]]) -> float:
+    values = []
+    for true, pred in pairs:
+        if true == 0:
+            continue
+        values.append(abs((true - pred) / true))
+    if not values:
+        return float("nan")
+    return sum(values) / len(values)
+
+
+def _safe_smape(pairs: List[Tuple[float, float]]) -> float:
+    values = []
+    for true, pred in pairs:
+        denom = abs(true) + abs(pred)
+        if denom == 0:
+            continue
+        values.append(2 * abs(pred - true) / denom)
+    if not values:
+        return float("nan")
+    return sum(values) / len(values)
+
+
+def _regression_metrics(pairs: List[Tuple[float, float]]) -> Dict[str, float]:
+    if not pairs:
+        return {k: float("nan") for k in ["RMSE", "MSE", "MAE", "MAPE", "SMAPE", "R2"]}
+    diffs = [t - p for t, p in pairs]
+    mse = sum(d * d for d in diffs) / len(diffs)
+    rmse = math.sqrt(mse)
+    mae = sum(abs(d) for d in diffs) / len(diffs)
+    mape = _safe_mape(pairs)
+    smape = _safe_smape(pairs)
+    _, r2 = _metrics(pairs)
+    return {"RMSE": round(rmse,2), "MSE": round(mse,2), "MAE": round(mae,2), "MAPE": round(mape,2), "SMAPE": round(smape,2), "R2": round(r2,2)}
 
 
 def _evaluate_descriptor(expr: str, reverse_mapping: Dict[str, str], row: Dict[str, float]) -> float:
@@ -68,6 +105,12 @@ def main() -> None:
     parser.add_argument(
         "--output", type=Path, default=Path("predict_metrics.txt"), help="Output file"
     )
+    parser.add_argument(
+        "--metrics-csv",
+        type=Path,
+        default=Path("predict_task_metrics.csv"),
+        help="当 ntask>1 时，将每个任务的 RMSE/MAE/R2/MAPE/MSE/SMAPE 写入该 CSV",
+    )
     args = parser.parse_args()
 
 
@@ -78,6 +121,7 @@ def main() -> None:
     uspace_path = base / "SIS_subspaces" / "Uspace.expressions"
     sisso_out_path = base / "SISSO.out"
     models_dir = base / "Models"
+    sisso_in_path = base / "SISSO.in"
 
 
     model_path = _find_first(models_dir, r"top\d+_D\d+")
@@ -95,7 +139,12 @@ def main() -> None:
     uspace = _load_uspace(uspace_path)
     feature_ids = _load_model_features(model_path, args.model_rank)
     desc_dim = len(feature_ids)
-    coeffs = _load_coefficients(coeff_path, args.model_rank, len(task_index), desc_dim)
+    ntasks_declared, _ = _read_sisso_config(sisso_in_path)
+    single_job = ntasks_declared == 1
+
+    coeffs = _load_coefficients(
+        coeff_path, args.model_rank, len(task_index), desc_dim, single_job
+    )
 
     prepared_expressions: List[Tuple[str, Dict[str, str]]] = []
     for fid in feature_ids:
@@ -118,14 +167,35 @@ def main() -> None:
 
     report_lines = ["task_index task_name train_RMSE predict_RMSE R2 "]
     all_pairs: List[Tuple[float, float]] = []
+    metrics_rows: List[Dict[str, float | str | int]] = []
     for task, idx in sorted(task_index.items(), key=lambda x: x[1]):
         rmse, r2 = _metrics(task_pairs[task])
         report_lines.append(f"{idx+1} {task} {train_rmse[idx]} {rmse:.6f} {r2:.6f}")
         all_pairs.extend(task_pairs[task])
+        metrics = _regression_metrics(task_pairs[task])
+        metrics_rows.append(
+            {
+                "task_index": idx + 1,
+                "task_name": task,
+                **metrics,
+            }
+        )
     overall_rmse, _ = _metrics(all_pairs)
     args.output.write_text(
         "\n".join(report_lines) + "\n" + f"Overall predict_RMSE: {overall_rmse:.6f}"
     )
+
+    if ntasks_declared != 1 and metrics_rows:
+        args.metrics_csv.parent.mkdir(parents=True, exist_ok=True)
+        # 延迟导入，避免脚本顶部增加依赖成本
+        import pandas as pd
+
+        metrics_df = pd.DataFrame(metrics_rows)
+        metrics_df = metrics_df[
+            ["task_index", "task_name", "RMSE", "MAE", "R2", "MAPE", "MSE", "SMAPE"]
+        ]
+        metrics_df.to_csv(args.metrics_csv, index=False)
+        print("Per-task metrics CSV:", args.metrics_csv)
 
     print("Model file:", model_path.name)
     print("Coeff file:", coeff_path.name)
